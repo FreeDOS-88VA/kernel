@@ -2094,6 +2094,99 @@ STATIC char strcaseequal(const char * d, const char * s)
     that saves some relocation problems
 */
 
+#if BIG_SECTOR
+STATIC void config_init_buffers(int wantedbuffers)
+{
+  unsigned buffers = 0;
+  unsigned maxbuffers = 99;
+  unsigned buffersize;
+  UBYTE FAR *pbuffer;
+#if BIG_SECTOR
+  unsigned maxsecsize = LoL->maxsecsize;
+
+  if (maxsecsize < BUFFERSIZE)
+    maxsecsize = BUFFERSIZE;
+  if (maxsecsize > 8192)
+    maxsecsize = 8192;
+  LoL->maxsecsize = maxsecsize;
+  buffersize = sizeof(struct buffer) - BUFFERSIZE + maxsecsize;
+#else
+
+  buffersize = sizeof(struct buffer);
+#endif
+
+  /* fill HMA with buffers if BUFFERS count >=0 and DOS in HMA        */
+  if (wantedbuffers < 0)
+    wantedbuffers = -wantedbuffers;
+  else if (HMAState == HMA_DONE)
+    buffers = (0xfff0 - HMAFree) / buffersize;
+
+  maxbuffers = 0xfff0U / buffersize;    /* to avoid size_t overflow */
+  if (wantedbuffers < 6)         /* min 6 buffers                     */
+    wantedbuffers = 6;
+  if (wantedbuffers > maxbuffers)
+  {
+    printf("BUFFERS=%u not supported, reducing to %u\n", wantedbuffers, maxbuffers);
+    wantedbuffers = maxbuffers;
+  }
+  if (wantedbuffers > buffers)   /* more specified than available -> get em */
+    buffers = wantedbuffers;
+
+  LoL->nbuffers = buffers;
+  LoL->inforecptr = &LoL->firstbuf;
+  {
+    size_t bytes = buffersize * buffers;
+    pbuffer = HMAalloc(bytes);
+
+    if (pbuffer == NULL)
+    {
+      pbuffer = KernelAlloc(bytes, 'B', 0);
+      if (HMAState == HMA_DONE)
+        firstAvailableBuf = MK_FP(0xffff, HMAFree);
+    }
+    else
+    {
+      LoL->bufloc = LOC_HMA;
+      /* space in HMA beyond requested buffers available as user space */
+      firstAvailableBuf = (struct buffer FAR *)(pbuffer + buffersize * wantedbuffers);
+    }
+  }
+  LoL->deblock_buf = DiskTransferBuffer;
+  LoL->firstbuf = (struct buffer FAR *)pbuffer;
+
+  DebugPrintf(("init_buffers (size %u) at", buffersize));
+  DebugPrintf((" (%p)", LoL->firstbuf));
+
+  buffers--;
+  ((struct buffer FAR *)pbuffer)->b_prev = FP_OFF(pbuffer + (buffersize * buffers));
+  {
+    int i = buffers;
+    do
+    {
+      ((struct buffer FAR *)pbuffer)->b_next = FP_OFF(pbuffer + buffersize);
+      pbuffer += buffersize;
+      ((struct buffer FAR *)pbuffer)->b_prev = FP_OFF(pbuffer - buffersize);
+    }
+    while (--i);
+  }
+  ((struct buffer FAR *)pbuffer)->b_next = FP_OFF(pbuffer - (buffersize * buffers));
+
+    /* now, we can have quite some buffers in HMA
+       -- up to 50 for KE38616.
+       so we fill the HMA with buffers
+       but not if the BUFFERS count is negative ;-)
+     */
+
+  DebugPrintf((" done\n"));
+
+  if (FP_SEG(pbuffer) == 0xffff)
+  {
+    buffers++;
+    printf("Kernel: allocated %d Diskbuffers = %u Bytes in HMA\n",
+           buffers, buffers * buffersize);
+  }
+}
+#else
 STATIC void config_init_buffers(int wantedbuffers)
 {
   struct buffer FAR *pbuffer;
@@ -2169,6 +2262,7 @@ STATIC void config_init_buffers(int wantedbuffers)
            buffers, buffers * sizeof(struct buffer));
   }
 }
+#endif
 
 /*
     Undocumented feature:  ANYDOS

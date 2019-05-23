@@ -29,3 +29,11 @@
 #ifndef MAX_SEC_SIZE
 #define MAX_SEC_SIZE    (1*512) /* max supported size of sector in bytes */
 #endif
+#ifndef BIG_SECTOR
+# if (MAX_SEC_SIZE) > 512
+#  define BIG_SECTOR (1)
+# else
+#  define BIG_SECTOR (0)
+# endif
+#endif
+
