@@ -30,6 +30,12 @@
 #include "portab.h"
 #include "init-mod.h"
 #include "dyndata.h"
+#if defined(PC88VA)
+#include "../pc88va/kernel/m13_layout.h"
+#endif
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+#include "../pc88va/kernel/m13_diag.h"
+#endif
 
 #ifdef VERSION_STRINGS
 static BYTE *RcsId =
@@ -42,11 +48,26 @@ static BYTE *RcsId =
 #define DebugPrintf(x)
 #endif
 #define para2far(seg) ((mcb FAR *)MK_FP((seg), 0))
+#if defined(PC88VA)
+
+#if defined(PC88VA)
+/* INIT has SS != DS; numeric outputs may refer to stack locals. */
+#define CFGPTR FAR
+#else
+#define CFGPTR
+#endif
 
 /**
   Menu selection bar struct:
   x pos, ypos, string
 */
+#else
+
+/**
+  Menu selection bar struct:
+  x pos, ypos, string
+*/
+#endif
 #define MENULINEMAX 80
 #define MENULINESMAX 10
 struct MenuSelector
@@ -65,7 +86,11 @@ int MenuColor = -1;
 
 STATIC void WriteMenuLine(struct MenuSelector *menu)
 {
+#if defined(PC88VA)
+  INIT_LOCAL iregs r;
+#else
   iregs r;
+#endif
   unsigned char attr = (unsigned char)MenuColor;
   char *pText = menu->Text;
 
@@ -149,6 +174,12 @@ struct config Config = {
 
 STATIC seg base_seg BSS_INIT(0);
 STATIC seg umb_base_seg BSS_INIT(0);
+#if defined(PC88VA)
+/* The low resident hull and high temporary reservation bound one arena. */
+STATIC seg pc88va_mcb_top BSS_INIT(0);
+UWORD pc88va_boot_mcb BSS_INIT(0);
+UWORD pc88va_boot_top BSS_INIT(0);
+#endif
 BYTE FAR *lpTop BSS_INIT(0);
 STATIC unsigned nCfgLine BSS_INIT(0);
 COUNT UmbState BSS_INIT(0);
@@ -221,6 +252,11 @@ STATIC char toupper(char c);
 STATIC VOID strupr(char *s);
 STATIC VOID mcb_init(UCOUNT seg, UWORD size, BYTE type);
 STATIC VOID mumcb_init(UCOUNT seg, UWORD size);
+#if defined(PC88VA)
+STATIC seg pc88va_para_segment(BYTE FAR *p);
+STATIC VOID pc88va_init_mcb(seg segment, UWORD size, BYTE type,
+                            UWORD owner);
+#endif
 
 STATIC VOID Stacks(BYTE * pLine);
 STATIC VOID StacksHigh(BYTE * pLine);
@@ -228,7 +264,11 @@ STATIC VOID StacksHigh(BYTE * pLine);
 STATIC VOID SetAnyDos(BYTE * pLine);
 STATIC VOID SetIdleHalt(BYTE * pLine);
 STATIC VOID Numlock(BYTE * pLine);
+#if defined(PC88VA)
+STATIC BYTE * GetNumArg(BYTE * pLine, COUNT CFGPTR * pnArg);
+#else
 STATIC BYTE * GetNumArg(BYTE * pLine, COUNT * pnArg);
+#endif
 BYTE *GetStringArg(BYTE * pLine, BYTE * pszString);
 STATIC int SkipLine(char *pLine);
 #if 0
@@ -266,43 +306,103 @@ STATIC struct table commands[] = {
 
   /* rem is never executed by locking out pass                    */
   {"REM", 0, CfgIgnore},
+#if defined(PC88VA)
+  /* The loader has already validated and applied this selector. */
+  {"PC88VA_LOADSEG", 0, CfgIgnore},
+#endif
   {";", 0,   CfgIgnore},
 
+#if defined(PC88VA)
+  {"MENUCOLOR",0, CfgFailure},
+#else
   {"MENUCOLOR",0,CfgMenuColor},
+#endif
 
+#if defined(PC88VA)
+  {"MENUDEFAULT", 0, CfgFailure},
+#else
   {"MENUDEFAULT", 0, CfgMenuDefault},
+#endif
+#if defined(PC88VA)
+  {"MENU", 0, CfgFailure},         /* lines to print in pass 0 */
+#else
   {"MENU", 0, CfgMenu},         /* lines to print in pass 0 */
+#endif
   {"ECHO", 2, CfgMenu},         /* lines to print in pass 2 - install(high) */
   {"EECHO", 2, CfgMenuEsc},     /* modified ECHO (ea) */
 
   {"BREAK", 1, CfgBreak},
   {"BUFFERS", 1, Config_Buffers},
+#if defined(PC88VA)
+  {"BUFFERSHIGH", 1, CfgFailure}, /* as BUFFERS - we use HMA anyway */
+#else
   {"BUFFERSHIGH", 1, CfgBuffersHigh}, /* as BUFFERS - we use HMA anyway */
+#endif
   {"COMMAND", 1, InitPgm},
   {"COUNTRY", 1, Country},
   {"DOS", 1, Dosmem},
+#if defined(PC88VA)
+  {"DOSDATA", 1, CfgFailure},
+#else
   {"DOSDATA", 1, DosData},
+#endif
   {"FCBS", 1, Fcbs},
+#if defined(PC88VA)
+  {"KEYBUF", 1, CfgFailure},	/* ea */
+#else
   {"KEYBUF", 1, CfgKeyBuf},	/* ea */
+#endif
   {"FILES", 1, Files},
+#if defined(PC88VA)
+  {"FILESHIGH", 1, CfgFailure},
+#else
   {"FILESHIGH", 1, FilesHigh},
+#endif
   {"LASTDRIVE", 1, CfgLastdrive},
+#if defined(PC88VA)
+  {"LASTDRIVEHIGH", 1, CfgFailure},
+#else
   {"LASTDRIVEHIGH", 1, CfgLastdriveHigh},
+#endif
+#if defined(PC88VA)
+  {"NUMLOCK", 1, CfgFailure},
+#else
   {"NUMLOCK", 1, Numlock},
+#endif
   {"SHELL", 1, InitPgm},
+#if defined(PC88VA)
+  {"SHELLHIGH", 1, CfgFailure},
+#else
   {"SHELLHIGH", 1, InitPgmHigh},
+#endif
   {"STACKS", 1, Stacks},
+#if defined(PC88VA)
+  {"STACKSHIGH", 1, CfgFailure},
+#else
   {"STACKSHIGH", 1, StacksHigh},
+#endif
   {"SWITCHAR", 1, CfgSwitchar},
+#if defined(PC88VA)
+  {"SCREEN", 1, CfgFailure},   /* JPP */
+#else
   {"SCREEN", 1, sysScreenMode},   /* JPP */
+#endif
   {"VERSION", 1, sysVersion},     /* JPP */
   {"ANYDOS", 1, SetAnyDos},       /* tom */
   {"IDLEHALT", 1, SetIdleHalt},   /* ea  */
 
   {"DEVICE", 2, Device},
+#if defined(PC88VA)
+  {"DEVICEHIGH", 2, CfgFailure},
+#else
   {"DEVICEHIGH", 2, DeviceHigh},
+#endif
   {"INSTALL", 2, CmdInstall},
+#if defined(PC88VA)
+  {"INSTALLHIGH", 2, CfgFailure},
+#else
   {"INSTALLHIGH", 2, CmdInstallHigh},
+#endif
   {"CHAIN", 2, CmdChain},
   {"SET", 2, CmdSet},
 
@@ -382,6 +482,15 @@ void PreConfig(void)
 void PreConfig2(void)
 {
   struct sfttbl FAR *sp;
+#if defined(PC88VA)
+  seg arena_base;
+  seg arena_top;
+  seg image_start;
+  seg stack_end;
+  seg resident_start;
+  seg resident_end;
+  UWORD resident_paras;
+#endif
 
   /* initialize NEAR allocated things */
 
@@ -393,7 +502,39 @@ void PreConfig2(void)
      and allocation starts after the kernel.
    */
 
+#if defined(PC88VA)
+  /* The low resident hull is outside the DOS arena. The high temporary
+     envelope includes early buffers, INIT code, and the INIT stack. */
+  image_start = (seg)pc88va_image_segment();
+  stack_end = m13_layout.resident_text_segment;
+  resident_start = (seg)CurrentKernelSegment;
+  resident_paras = (UWORD)((HMAFree + 15UL) / 16UL);
+  if (m13_layout.version != 1 ||
+      image_start != m13_layout.image_segment ||
+      _SS != m13_layout.init_stack_segment ||
+      (ULONG)ram_top * 64UL > 0xffffUL ||
+      (ULONG)resident_start + resident_paras > 0xffffUL ||
+      image_start < PC88VA_FIRMWARE_END_SEG || image_start >= stack_end ||
+      resident_start != stack_end || resident_paras == 0)
+    init_fatal("PC88VA resident arena");
+  resident_end = (seg)(resident_start + resident_paras);
+  arena_base = resident_end;
+  arena_top = pc88va_para_segment(lpTop);
+  pc88va_boot_top = (seg)((ULONG)ram_top * 64UL);
+  if (arena_top <= arena_base || arena_top - arena_base < 3U ||
+      arena_top >= pc88va_boot_top)
+    init_fatal("PC88VA temporary arena");
+  pc88va_boot_mcb = arena_top - 1U;
+  base_seg = LoL->first_mcb = arena_base;
+  pc88va_init_mcb(base_seg,
+                  (UWORD)(pc88va_boot_mcb - base_seg - 1U),
+                  MCB_NORMAL, FREE_PSP);
+  pc88va_init_mcb(pc88va_boot_mcb,
+                  (UWORD)(pc88va_boot_top - arena_top), MCB_LAST, 8);
+  pc88va_mcb_top = pc88va_boot_mcb;
+#else
   base_seg = LoL->first_mcb = FP_SEG(AlignParagraph((BYTE FAR *) DynLast() + 0x0f));
+#endif
 
   if (Config.ebda2move)
   {
@@ -403,8 +544,10 @@ void PreConfig2(void)
     ram_top += ebda_size / 1024;
   }
 
+#if !defined(PC88VA)
   /* We expect ram_top as Kbytes, so convert to paragraphs */
   mcb_init(base_seg, ram_top * 64 - LoL->first_mcb - 1, MCB_LAST);
+#endif
 
   sp = LoL->sfthead;
   sp = sp->sftt_next = KernelAlloc(sizeof(sftheader) + 3 * sizeof(sft), 'F', 0);
@@ -441,6 +584,15 @@ void PostConfig(void)
   if (LoL->lastdrive < LoL->nblkdev)
     LoL->lastdrive = LoL->nblkdev;
 
+#if defined(PC88VA)
+  /* Temporary buffers remain reserved until the resident P_0 handoff. */
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_arena(base_seg, pc88va_mcb_top,
+                        (unsigned short)CurrentKernelSegment,
+                        (unsigned short)ram_top);
+#endif
+#endif
+
   DebugPrintf(("starting FAR allocations at %x\n", base_seg));
 
   /* Begin by initializing our system buffers                     */
@@ -460,6 +612,192 @@ void PostConfig(void)
     KernelAlloc(sizeof(sftheader) + (Config.cfgFiles - 8) * sizeof(sft), 'F',
                 Config.cfgFilesHigh);
   sp->sftt_next = (sfttbl FAR *) - 1;
+#if defined(PC88VA)
+  sp->sftt_count = Config.cfgFiles - 8;
+
+  LoL->CDSp = KernelAlloc(sizeof(struct cds) * LoL->lastdrive, 'L', Config.cfgLastdriveHigh);
+
+#ifdef DEBUG
+/*  printf(" FCB table 0x%p\n",LoL->FCBp);*/
+  printf(" sft table 0x%p\n", LoL->sfthead->sftt_next);
+  printf(" CDS table 0x%p\n", LoL->CDSp);
+  printf(" DPB table 0x%p\n", LoL->DPBp);
+#endif
+  if (Config.cfgStacks)
+  {
+    VOID FAR *stackBase =
+        KernelAlloc(Config.cfgStacks * Config.cfgStackSize, 'S',
+                    Config.cfgStacksHigh);
+    init_stacks(stackBase, Config.cfgStacks, Config.cfgStackSize);
+
+    DebugPrintf(("Stacks allocated at %p\n", stackBase));
+  }
+  DebugPrintf(("Allocation completed: top at 0x%x\n", base_seg));
+
+}
+
+/* This code must be executed after device drivers has been loaded */
+VOID configDone(VOID)
+{
+  if (UmbState == 1)
+    para2far(base_seg)->m_type = MCB_LAST;
+
+  if (HMAState != HMA_DONE)
+  {
+#if defined(PC88VA)
+    /* Already placed in the final low resident hull before Dyn allocation. */
+    if (CurrentKernelSegment != m13_layout.resident_text_segment)
+      init_fatal("PC88VA resident moved");
+#else
+    mcb FAR *p;
+    unsigned short kernel_seg;
+    unsigned short hma_paras = (HMAFree+0xf)/16;
+
+    kernel_seg = allocmem(hma_paras);
+    p = para2far(kernel_seg - 1);
+
+    p->m_name[0] = 'S';
+    p->m_name[1] = 'C';
+    p->m_psp = 8;
+
+    DebugPrintf(("HMA not available, moving text to %x\n", kernel_seg));
+    MoveKernel(kernel_seg);
+
+    kernel_seg += hma_paras + 1;
+
+    DebugPrintf(("kernel is low, start alloc at %x", kernel_seg));
+#endif
+  }
+
+#if defined(PC88VA)
+  /* Keep all final FAR kernel work adjacent to the resident hull. The MCB
+     and sub-MCB paragraphs are owned metadata, not reserved address gaps.
+     Early high buffers and INIT stay temporary until the P_0 release barrier. */
+  {
+    seg resident_end = (seg)(CurrentKernelSegment + (HMAFree + 15UL) / 16UL);
+    mcb FAR *system = para2far(LoL->first_mcb);
+    mcb FAR *remaining = para2far(base_seg);
+    if (LoL->first_mcb != resident_end || base_seg <= resident_end ||
+        system->m_psp != 8 || system->m_type != MCB_NORMAL ||
+        (ULONG)resident_end + system->m_size + 1UL != base_seg ||
+        remaining->m_psp != FREE_PSP || remaining->m_type != MCB_NORMAL ||
+        (ULONG)base_seg + remaining->m_size + 1UL != pc88va_boot_mcb)
+      init_fatal("PC88VA low layout gap");
+    printf("\nKernel low = %05lxh-%05lxh\n",
+           (ULONG)pc88va_image_segment() << 4, (ULONG)base_seg << 4);
+    printf("Kernel work = %05lxh-%05lxh\n",
+           (ULONG)resident_end << 4, (ULONG)base_seg << 4);
+    printf("DOS free begins = %05lxh\n", ((ULONG)base_seg + 1UL) << 4);
+  }
+#endif
+
+  /* The standard handles should be reopened here, because
+     we may have loaded new console or printer drivers in CONFIG.SYS */
+}
+
+STATIC seg prev_mcb(seg cur_mcb, seg start)
+{
+  /* determine prev mcb */
+  seg mcb_prev, mcb_next;
+  mcb_prev = mcb_next = start;
+  while (mcb_next < cur_mcb && para2far(mcb_next)->m_type == MCB_NORMAL)
+  {
+    mcb_prev = mcb_next;
+    mcb_next += para2far(mcb_prev)->m_size + 1;
+  }
+  return mcb_prev;
+}
+
+STATIC void umb_init(void)
+{
+#if defined(PC88VA)
+  /* No VA UMB provider is selected by this configuration contract. */
+  return;
+#else
+  INIT_LOCAL UCOUNT umb_seg, umb_size;
+  seg umb_max;
+  void far *xms_addr;
+
+  if ((xms_addr = DetectXMSDriver()) == NULL)
+    return;
+
+  if (UMB_get_largest(xms_addr, &umb_seg, &umb_size))
+  {
+    UmbState = 1;
+
+    /* reset root */
+    /* Note: since device drivers can change what is considered top of memory (e.g. move XBDA) we must requery */
+    ram_top = init_oem();
+    LoL->uppermem_root = ram_top * 64 - 1;
+
+    /* create link mcb (below) */
+    para2far(base_seg)->m_type = MCB_NORMAL;
+    para2far(base_seg)->m_size--;
+    mumcb_init(LoL->uppermem_root, umb_seg - LoL->uppermem_root - 1);
+
+    /* setup the real mcb for the devicehigh block */
+    mcb_init(umb_seg, umb_size - 2, MCB_NORMAL);
+
+    umb_base_seg = umb_max = umb_start = umb_seg;
+    UMB_top = umb_size;
+
+    /* there can be more UMBs !
+       this happens, if memory mapped devces are in between
+       like UMB memory c800..c8ff, d8ff..efff with device at d000..d7ff
+       However some of the xxxHIGH commands still only work with
+       the first UMB.
+    */
+
+    while (UMB_get_largest(xms_addr, &umb_seg, &umb_size))
+    {
+      seg umb_prev, umb_next;
+
+      /* setup the real mcb for the devicehigh block */
+      mcb_init(umb_seg, umb_size - 2, MCB_NORMAL);
+
+      /* determine prev and next umbs */
+      umb_prev = prev_mcb(umb_seg, LoL->uppermem_root);
+      umb_next = umb_prev + para2far(umb_prev)->m_size + 1;
+
+      if (umb_seg < umb_max)
+      {
+        if (umb_next - umb_seg - umb_size == 0)
+        {
+          /* should the UMB driver return
+             adjacent memory in several pieces */
+          umb_size += para2far(umb_next)->m_size + 1;
+          para2far(umb_seg)->m_size = umb_size;
+        }
+        else
+        {
+          /* create link mcb (above) */
+          mumcb_init(umb_seg + umb_size - 1, umb_next - umb_seg - umb_size);
+        }
+      }
+      else /* umb_seg >= umb_max */
+      {
+        umb_prev = umb_next;
+      }
+
+      if (umb_seg - umb_prev - 1 == 0)
+        /* should the UMB driver return
+           adjacent memory in several pieces */
+        para2far(prev_mcb(umb_prev, LoL->uppermem_root))->m_size += umb_size;
+      else
+      {
+        /* create link mcb (below) */
+        mumcb_init(umb_prev, umb_seg - umb_prev - 1);
+      }
+
+      if (umb_seg > umb_max)
+        umb_max = umb_seg;
+    }
+    para2far(umb_max)->m_size++;
+    para2far(umb_max)->m_type = MCB_LAST;
+    DebugPrintf(("UMB Allocation completed: start at 0x%x\n", umb_base_seg));
+  }
+#endif
+#else
   sp->sftt_count = Config.cfgFiles - 8;
 
   LoL->CDSp = KernelAlloc(sizeof(struct cds) * LoL->lastdrive, 'L', Config.cfgLastdriveHigh);
@@ -611,6 +949,7 @@ STATIC void umb_init(void)
     para2far(umb_max)->m_type = MCB_LAST;
     DebugPrintf(("UMB Allocation completed: start at 0x%x\n", umb_base_seg));
   }
+#endif
 }
 
 #ifdef MEMDISK_ARGS
@@ -805,6 +1144,8 @@ VOID DoConfig(int nPass)
   BYTE *pLine;
   BOOL bEof = FALSE;
 
+
+
 #ifdef MEMDISK_ARGS
   /* check if MEMDISK used for LoL->BootDrive, if so check for special appended arguments */
   struct memdiskinfo FAR *mdsk = NULL;
@@ -965,6 +1306,119 @@ VOID DoConfig(int nPass)
       /* compatibility "device foo.sys" */
       if (' ' != *pLine && '\t' != *pLine && '=' != *pLine)
       {
+#if defined(PC88VA)
+        CfgFailure(pLine);
+        continue;
+      }
+      pLine = skipwh(pLine);
+    }
+    if ('=' == *pLine || pEntry->func == CfgMenu || pEntry->func == CfgMenuEsc)
+      pLine = skipwh(pLine+1);
+
+    /* YES. DO IT */
+    pEntry->func(pLine);
+  }
+  close(nFileDesc);
+
+  if (nPass == 0)
+  {
+    DoMenu();
+  }
+}
+
+STATIC struct table * LookUp(struct table *p, BYTE * token)
+{
+  while (p->entry[0] != '\0' && !strcaseequal(p->entry, token))
+    ++p;
+  return p;
+}
+
+/*
+    get BIOS key with timeout:
+
+    timeout < 0: no timeout
+    timeout = 0: poll only once
+    timeout > 0: timeout in seconds
+
+    return
+            0xffff : no key hit
+
+            0xHH.. : scancode in upper  half
+            0x..LL : asciicode in lower half
+*/
+#define GetBiosTime() peekl(0, 0x46c)
+
+UWORD GetBiosKey(int timeout)
+{
+#if defined(PC88VA)
+  static iregs keyregs;
+  ULONG start, now;
+  unsigned key;
+  keyregs.a.x = 0x2c00;
+  init_call_intr(0x21, &keyregs);
+  start = keyregs.c.b.h * 3600UL + keyregs.c.b.l * 60UL + keyregs.d.b.h;
+  for (;;)
+  {
+    keyregs.a.x = 0x0b00;
+    init_call_intr(0x21, &keyregs);
+    if (keyregs.a.b.l)
+    {
+      keyregs.a.x = 0x0700;
+      init_call_intr(0x21, &keyregs);
+      key = keyregs.a.b.l;
+      if (key == 0)
+      {
+        keyregs.a.x = 0x0700;
+        init_call_intr(0x21, &keyregs);
+        key = (unsigned)keyregs.a.b.l << 8;
+      }
+      return key;
+    }
+    if (timeout == 0)
+      return 0xffff;
+    if (timeout > 0)
+    {
+      keyregs.a.x = 0x2c00;
+      init_call_intr(0x21, &keyregs);
+      now = keyregs.c.b.h * 3600UL + keyregs.c.b.l * 60UL + keyregs.d.b.h;
+      if ((now + 86400UL - start) % 86400UL >= (unsigned)timeout)
+        return 0xffff;
+    }
+  }
+#else
+  INIT_LOCAL iregs r;
+
+  ULONG startTime = GetBiosTime();
+
+  if (timeout >= 0)
+  {
+    do
+    {
+      /* optionally HLT here - timer will IRQ even if no keypress */
+      r.a.x = 0x0100;             /* are there keys available ? */
+      init_call_intr(0x16, &r);
+      if (!(r.flags & FLG_ZERO)) {
+        r.a.x = 0x0000;
+        init_call_intr(0x16, &r); /* there is a key, so better fetch it! */
+        return r.a.x;
+      }
+    } while ((unsigned)(GetBiosTime() - startTime) < timeout * 18u);
+    return 0xffff;
+  }
+
+  /* blocking wait (timeout < 0): fetch it */
+#if 0
+  do {
+      /* optionally HLT here */
+      r.a.x = 0x0100;
+      init_call_intr(0x16, &r);
+  } while (r.flags & FLG_ZERO);
+#endif
+  r.a.x = 0x0000;
+  init_call_intr(0x16, &r);
+  return r.a.x;
+#endif
+#else
         CfgFailure(pLine);
         continue;
       }
@@ -1039,6 +1493,7 @@ UWORD GetBiosKey(int timeout)
   r.a.x = 0x0000;
   init_call_intr(0x16, &r);
   return r.a.x;
+#endif
 }
 
 STATIC BOOL SkipLine(char *pLine)
@@ -1124,10 +1579,17 @@ STATIC BOOL SkipLine(char *pLine)
   }
 
 }
+#if defined(PC88VA)
+
+/* JPP - changed so will accept hex number. */
+/* ea - changed to accept hex digits in hex numbers */
+STATIC char *GetNumArg(char *p, int CFGPTR *num)
+#else
 
 /* JPP - changed so will accept hex number. */
 /* ea - changed to accept hex digits in hex numbers */
 STATIC char *GetNumArg(char *p, int *num)
+#endif
 {
   static char digits[] = "0123456789ABCDEF";
   unsigned char base = 10;
@@ -1174,6 +1636,58 @@ BYTE *GetStringArg(BYTE * pLine, BYTE * pszString)
 }
 
 STATIC void Config_Buffers(BYTE * pLine)
+#if defined(PC88VA)
+{
+  COUNT nBuffers;
+
+  /* Get the argument                                             */
+  if (GetNumArg(pLine, &nBuffers))
+    Config.cfgBuffers = nBuffers;
+}
+
+STATIC void CfgBuffersHigh(BYTE * pLine)
+{
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
+  Config_Buffers(pLine);
+  printf("Note: BUFFERS will be in HMA or low RAM, not in UMB\n");
+#endif
+}
+
+/**
+  Set screen mode - rewritten to use init_call_intr() by RE / ICD
+*/
+STATIC VOID sysScreenMode(BYTE * pLine)
+{
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
+  INIT_LOCAL iregs r;
+  COUNT nMode;
+  COUNT nFunc = 0x11;
+
+  /* Get the argument                                             */
+  if (GetNumArg(pLine, &nMode) == (BYTE *) 0)
+    return;
+
+  if(nMode<0x10)
+    nFunc = 0; /* set lower screenmode */
+  else if ((nMode != 0x11) && (nMode != 0x12) && (nMode != 0x14))
+    return; /* do nothing; invalid screenmode */
+
+/* Modes
+   0x11 (17)   28 lines
+   0x12 (18)   43/50 lines
+   0x14 (20)   25 lines
+ */
+  /* move cursor to pos 0,0: */
+  r.a.b.h = nFunc; /* set videomode */
+  r.a.b.l = nMode;
+  r.b.b.l = 0;
+  init_call_intr(0x10, &r);
+#endif
+#else
 {
   COUNT nBuffers;
 
@@ -1216,6 +1730,7 @@ STATIC VOID sysScreenMode(BYTE * pLine)
   r.a.b.l = nMode;
   r.b.b.l = 0;
   init_call_intr(0x10, &r);
+#endif
 }
 
 STATIC VOID sysVersion(BYTE * pLine)
@@ -1258,8 +1773,12 @@ STATIC VOID Files(BYTE * pLine)
 
 STATIC VOID FilesHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   Files(pLine);
   Config.cfgFilesHigh = 1;
+#endif
 }
 
 STATIC VOID CfgLastdrive(BYTE * pLine)
@@ -1283,9 +1802,13 @@ STATIC VOID CfgLastdrive(BYTE * pLine)
 
 STATIC VOID CfgLastdriveHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   /* Format:   LASTDRIVEHIGH = letter         */
   CfgLastdrive(pLine);
   Config.cfgLastdriveHigh = 1;
+#endif
 }
 
 /*
@@ -1294,6 +1817,12 @@ STATIC VOID CfgLastdriveHigh(BYTE * pLine)
 
 STATIC VOID Dosmem(BYTE * pLine)
 {
+#if defined(PC88VA)
+  GetStringArg(pLine, szBuf);
+  if (!strcaseequal(szBuf, "LOW") && !strcaseequal(szBuf, "NOUMB") &&
+      !strcaseequal(szBuf, "LOW,NOUMB"))
+    CfgFailure(pLine);
+#else
   BYTE *pTmp;
   BYTE UMBwanted = FALSE;
 
@@ -1334,15 +1863,20 @@ STATIC VOID Dosmem(BYTE * pLine)
   {
     HMAState = HMA_DONE;
   }
+#endif
 }
 
 STATIC VOID DosData(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   pLine = GetStringArg(pLine, szBuf);
   strupr(szBuf);
 
   if (memcmp(szBuf, "UMB", 3) == 0)
     Config.cfgDosDataUmb = TRUE;
+#endif
 }
 
 STATIC VOID CfgSwitchar(BYTE * pLine)
@@ -1445,6 +1979,9 @@ STATIC VOID Fcbs(BYTE * pLine)
 */
 STATIC VOID CfgKeyBuf(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   /*  Format:     KEYBUF = startoffset [,endoffset]    */
   UWORD FAR *keyfill = (UWORD FAR *) MK_FP(0x40, 0x1a);
   UWORD FAR *keyrange = (UWORD FAR *) MK_FP(0x40, 0x80);
@@ -1474,6 +2011,7 @@ STATIC VOID CfgKeyBuf(BYTE * pLine)
   keyrange[0] = startbuf;
   keyrange[1] = endbuf;
   keycheck();
+#endif
 }
 
 /*      LoadCountryInfo():
@@ -1486,9 +2024,15 @@ STATIC VOID CfgKeyBuf(BYTE * pLine)
  */
 STATIC BOOL LoadCountryInfo(char *filenam, UWORD ctryCode, UWORD codePage)
 {
+#if defined(PC88VA)
+  /* COUNTRY.SYS file data structures - see RBIL tables 2619-2622 */
+
+  INIT_LOCAL struct {      /* file header */
+#else
   /* COUNTRY.SYS file data structures - see RBIL tables 2619-2622 */
 
   struct {      /* file header */
+#endif
     char name[8];       /* "\377COUNTRY.SYS" */
     char reserved[11];
     ULONG offset;       /* offset of first entry in file */
@@ -1686,14 +2230,22 @@ STATIC VOID Stacks(BYTE * pLine)
 
 STATIC VOID StacksHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   Stacks(pLine);
   Config.cfgStacksHigh = 1;
+#endif
 }
 
 STATIC VOID InitPgmHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   InitPgm(pLine);
   Config.cfgP_0_startmode = 0x80;
+#endif
 }
 
 STATIC VOID InitPgm(BYTE * pLine)
@@ -1726,6 +2278,9 @@ STATIC VOID CfgBreak(BYTE * pLine)
 
 STATIC VOID Numlock(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   /* Format:      NUMLOCK = (ON | OFF)      */
   BYTE FAR *keyflags = (BYTE FAR *) MK_FP(0x40, 0x17);
 
@@ -1734,10 +2289,14 @@ STATIC VOID Numlock(BYTE * pLine)
   *keyflags &= ~32;
   if (!strcaseequal(szBuf, "OFF")) *keyflags |= 32;
   keycheck();
+#endif
 }
 
 STATIC VOID DeviceHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   if (UmbState == 1)
   {
     if (LoadDevice(pLine, MK_FP(umb_start + UMB_top, 0), TRUE) == DE_NOMEM)
@@ -1751,6 +2310,7 @@ STATIC VOID DeviceHigh(BYTE * pLine)
     printf("UMBs unavailable!\n");
     LoadDevice(pLine, lpTop, FALSE);
   }
+#endif
 }
 
 STATIC void Device(BYTE * pLine)
@@ -1884,6 +2444,18 @@ void FAR * KernelAllocPara(size_t nPara, char type, char *name, int mode)
     start = LoL->first_mcb;
   }
 
+#if defined(PC88VA)
+  /* Check the payload and sub-MCB before creating any metadata. The first
+     system-block split also consumes a paragraph for its new free header. */
+  if (!mode && (base < start || base >= pc88va_mcb_top ||
+      para2far(base)->m_psp != FREE_PSP ||
+      para2far(base)->m_type != MCB_NORMAL ||
+      (ULONG)nPara + 1UL + (base == start ? 1UL : 0UL) >
+        para2far(base)->m_size ||
+      (ULONG)base + para2far(base)->m_size + 1UL > pc88va_mcb_top))
+    init_fatal("PC88VA allocation bounds");
+#endif
+
   /* create the special DOS data MCB if it doesn't exist yet */
   DebugPrintf(("kernelallocpara: %x %x %x %c %d\n", start, base, nPara, type, mode));
 
@@ -1918,11 +2490,23 @@ void FAR * KernelAlloc(size_t nBytes, char type, int mode)
 {
   void FAR *p;
   size_t nPara = (nBytes + 15)/16;
+#if defined(PC88VA)
+  nPara = (size_t)(((ULONG)nBytes + 15UL) / 16UL);
+#endif
 
   if (LoL->first_mcb == 0)
   {
     /* prealloc */
+#if defined(PC88VA)
+    ULONG low = (ULONG)CurrentKernelSegment + (HMAFree + 15UL) / 16UL;
+    UWORD top = pc88va_para_segment(lpTop);
+    if (CurrentKernelSegment == 0 || top > (ULONG)ram_top * 64UL ||
+        low + nPara + 2UL >= top)
+      init_fatal("PC88VA early allocation");
+    lpTop = MK_FP(top - nPara, 0);
+#else
     lpTop = MK_FP(FP_SEG(lpTop) - nPara, FP_OFF(lpTop));
+#endif
     p = AlignParagraph(lpTop);
   }
   else
@@ -1958,6 +2542,25 @@ STATIC void FAR * AlignParagraph(VOID FAR * lpPtr)
   /* boundary.                                                    */
   return MK_FP(uSegVal, 0);
 }
+#if defined(PC88VA)
+/* Return the paragraph containing the end of a segmented byte pointer. */
+STATIC seg pc88va_para_segment(BYTE FAR *p)
+{
+  return (seg)(FP_SEG(p) + ((ULONG)FP_OFF(p) + 15UL) / 16UL);
+}
+
+/* Initialize one PC-88VA MCB without inheriting mcb_init's static template. */
+STATIC VOID pc88va_init_mcb(seg segment, UWORD size, BYTE type, UWORD owner)
+{
+  mcb FAR *p = para2far(segment);
+
+  p->m_type = type;
+  p->m_psp = owner;
+  p->m_size = size;
+  fmemset(p->m_fill, 0, sizeof(p->m_fill));
+  fmemset(p->m_name, 0, sizeof(p->m_name));
+}
+#endif
 #endif
 
 STATIC int iswh(unsigned char c)
@@ -2088,6 +2691,551 @@ STATIC char strcaseequal(const char * d, const char * s)
       return 1;
   return 0;
 }
+#if defined(PC88VA)
+
+/*
+    moved from BLOCKIO.C here.
+    that saves some relocation problems
+*/
+
+#if BIG_SECTOR
+STATIC void config_init_buffers(int wantedbuffers)
+{
+  unsigned buffers = 0;
+  unsigned maxbuffers = 99;
+  unsigned buffersize;
+  UBYTE FAR *pbuffer;
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  unsigned requestedbuffers = (unsigned)wantedbuffers;
+#endif
+#if BIG_SECTOR
+  unsigned maxsecsize = LoL->maxsecsize;
+
+  if (maxsecsize < BUFFERSIZE)
+    maxsecsize = BUFFERSIZE;
+  if (maxsecsize > 8192)
+    maxsecsize = 8192;
+  LoL->maxsecsize = maxsecsize;
+  buffersize = sizeof(struct buffer) - BUFFERSIZE + maxsecsize;
+#else
+
+  buffersize = sizeof(struct buffer);
+#endif
+
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_BUFFER_ALLOC_BEGIN);
+#endif
+
+  /* fill HMA with buffers if BUFFERS count >=0 and DOS in HMA        */
+  if (wantedbuffers < 0)
+    wantedbuffers = -wantedbuffers;
+  else if (HMAState == HMA_DONE)
+    buffers = (0xfff0 - HMAFree) / buffersize;
+
+  maxbuffers = 0xfff0U / buffersize;    /* to avoid size_t overflow */
+  if (wantedbuffers < 6)         /* min 6 buffers                     */
+    wantedbuffers = 6;
+  if (wantedbuffers > maxbuffers)
+  {
+    printf("BUFFERS=%u not supported, reducing to %u\n", wantedbuffers, maxbuffers);
+    wantedbuffers = maxbuffers;
+  }
+  if (wantedbuffers > buffers)   /* more specified than available -> get em */
+    buffers = wantedbuffers;
+
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_buffers((unsigned short)requestedbuffers,
+                          (unsigned short)maxbuffers,
+                          (unsigned short)buffers);
+#endif
+
+  LoL->nbuffers = buffers;
+  LoL->inforecptr = &LoL->firstbuf;
+  {
+    size_t bytes = buffersize * buffers;
+    pbuffer = HMAalloc(bytes);
+
+    if (pbuffer == NULL)
+    {
+      pbuffer = KernelAlloc(bytes, 'B', 0);
+      if (HMAState == HMA_DONE)
+        firstAvailableBuf = MK_FP(0xffff, HMAFree);
+    }
+    else
+    {
+      LoL->bufloc = LOC_HMA;
+      /* space in HMA beyond requested buffers available as user space */
+      firstAvailableBuf = (struct buffer FAR *)(pbuffer + buffersize * wantedbuffers);
+    }
+  }
+  LoL->deblock_buf = DiskTransferBuffer;
+  LoL->firstbuf = (struct buffer FAR *)pbuffer;
+
+  DebugPrintf(("init_buffers (size %u) at", buffersize));
+  DebugPrintf((" (%p)", LoL->firstbuf));
+
+  buffers--;
+  ((struct buffer FAR *)pbuffer)->b_prev = FP_OFF(pbuffer + (buffersize * buffers));
+  {
+    int i = buffers;
+    do
+    {
+      ((struct buffer FAR *)pbuffer)->b_next = FP_OFF(pbuffer + buffersize);
+      pbuffer += buffersize;
+      ((struct buffer FAR *)pbuffer)->b_prev = FP_OFF(pbuffer - buffersize);
+    }
+    while (--i);
+  }
+  ((struct buffer FAR *)pbuffer)->b_next = FP_OFF(pbuffer - (buffersize * buffers));
+
+    /* now, we can have quite some buffers in HMA
+       -- up to 50 for KE38616.
+       so we fill the HMA with buffers
+       but not if the BUFFERS count is negative ;-)
+     */
+
+  DebugPrintf((" done\n"));
+
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_BUFFER_CLEAR_DONE);
+#endif
+
+  if (FP_SEG(pbuffer) == 0xffff)
+  {
+    buffers++;
+    printf("Kernel: allocated %d Diskbuffers = %u Bytes in HMA\n",
+           buffers, buffers * buffersize);
+  }
+}
+#else
+STATIC void config_init_buffers(int wantedbuffers)
+{
+  struct buffer FAR *pbuffer;
+  unsigned buffers = 0;
+
+  /* fill HMA with buffers if BUFFERS count >=0 and DOS in HMA        */
+  if (wantedbuffers < 0)
+    wantedbuffers = -wantedbuffers;
+  else if (HMAState == HMA_DONE)
+    buffers = (0xfff0 - HMAFree) / sizeof(struct buffer);
+
+  if (wantedbuffers < 6)         /* min 6 buffers                     */
+    wantedbuffers = 6;
+  if (wantedbuffers > 99)        /* max 99 buffers                    */
+  {
+    printf("BUFFERS=%u not supported, reducing to 99\n", wantedbuffers);
+    wantedbuffers = 99;
+  }
+  if (wantedbuffers > buffers)   /* more specified than available -> get em */
+    buffers = wantedbuffers;
+
+  LoL->nbuffers = buffers;
+  LoL->inforecptr = &LoL->firstbuf;
+  {
+    size_t bytes = sizeof(struct buffer) * buffers;
+    pbuffer = HMAalloc(bytes);
+
+    if (pbuffer == NULL)
+    {
+      pbuffer = KernelAlloc(bytes, 'B', 0);
+      if (HMAState == HMA_DONE)
+        firstAvailableBuf = MK_FP(0xffff, HMAFree);
+    }
+    else
+    {
+      LoL->bufloc = LOC_HMA;
+      /* space in HMA beyond requested buffers available as user space */
+      firstAvailableBuf = pbuffer + wantedbuffers;
+    }
+  }
+  LoL->deblock_buf = DiskTransferBuffer;
+  LoL->firstbuf = pbuffer;
+
+  DebugPrintf(("init_buffers (size %u) at", sizeof(struct buffer)));
+  DebugPrintf((" (%p)", LoL->firstbuf));
+
+  buffers--;
+  pbuffer->b_prev = FP_OFF(pbuffer + buffers);
+  {
+    int i = buffers;
+    do
+    {
+      pbuffer->b_next = FP_OFF(pbuffer + 1);
+      pbuffer++;
+      pbuffer->b_prev = FP_OFF(pbuffer - 1);
+    }
+    while (--i);
+  }
+  pbuffer->b_next = FP_OFF(pbuffer - buffers);
+
+    /* now, we can have quite some buffers in HMA
+       -- up to 50 for KE38616.
+       so we fill the HMA with buffers
+       but not if the BUFFERS count is negative ;-)
+     */
+
+  DebugPrintf((" done\n"));
+
+  if (FP_SEG(pbuffer) == 0xffff)
+  {
+    buffers++;
+    printf("Kernel: allocated %d Diskbuffers = %u Bytes in HMA\n",
+           buffers, buffers * sizeof(struct buffer));
+  }
+}
+#endif
+
+/*
+    Undocumented feature:  ANYDOS
+        will report to MSDOS programs just the version number
+        they expect. be careful with it!
+*/
+STATIC VOID SetAnyDos(BYTE * pLine)
+{
+  UNREFERENCED_PARAMETER(pLine);
+  ReturnAnyDosVersionExpected = TRUE;
+}
+
+/*
+   Kernel built-in energy saving: IDLEHALT=haltlevel
+   -1 max savings, 0 never HLT, 1 safe kernel only HLT,
+   2 (3) also hooks int2f.1680 (and sets al=0)
+*/
+STATIC VOID SetIdleHalt(BYTE * pLine)
+{
+  COUNT haltlevel;
+  if (GetNumArg(pLine, &haltlevel))
+    HaltCpuWhileIdle = haltlevel; /* 0 for no HLT, 1..n more, -1 max */
+}
+
+STATIC VOID CfgIgnore(BYTE * pLine)
+{
+  UNREFERENCED_PARAMETER(pLine);
+}
+
+/*
+   'MENU'ing stuff
+   although it's worse then MSDOS's , its better then nothing
+*/
+
+STATIC void ClearScreen(unsigned char attr);
+STATIC VOID CfgMenu(BYTE * pLine)
+{
+  int nLen;
+  BYTE *pNumber = pLine;
+
+  printf("%s\n",pLine);
+  if (MenuColor == -1)
+    return;
+
+  pLine = skipwh(pLine);
+
+  /* skip drawing characters in cp437, which is what we'll have
+     just after booting! */
+  while ((unsigned char)*pLine >= 0xb0 && (unsigned char)*pLine < 0xe0)
+    pLine++;
+
+  pLine = skipwh(pLine);  /* skip more whitespaces... */
+
+  /* now I'm expecting a number here if this is a menu-choice line. */
+  if (isnum(pLine[0]))
+  {
+    struct MenuSelector *menu = &MenuStruct[pLine[0]-'0'];
+
+    menu->x = (pLine-pNumber);  /* xpos is at start of number */
+    menu->y = nMenuLine;
+    /* copy menu text: */
+    nLen = findend(pLine); /* length is until cr/lf, null or three spaces */
+
+    /* max 40 chars including nullterminator
+       (change struct at top of file if you want more...) */
+    if (nLen > MENULINEMAX-1)
+      nLen = MENULINEMAX-1;
+    memcpy(menu->Text, pLine, nLen);
+    menu->Text[nLen] = 0;  /* nullTerminate */
+  }
+  nMenuLine++;
+}
+
+STATIC VOID CfgMenuEsc(BYTE * pLine)
+{
+  BYTE * check;
+  for (check = pLine; check[0]; check++)
+    if (check[0] == '$') check[0] = 27;	/* translate $ to ESC */
+  printf("%s\n",pLine);
+}
+
+STATIC VOID DoMenu(void)
+{
+#if defined(PC88VA)
+  /* VA menu graphics require a native implementation. */
+  return;
+#else
+  INIT_LOCAL iregs r;
+  int key = -1;
+  if (Menus == 0)
+    return;
+
+  InitKernelConfig.SkipConfigSeconds = -1;
+
+  if (MenuColor == -1)
+    Menus |= 1 << 0;          /* '0' Menu always allowed */
+
+  nMenuLine+=2; /* use this to position "select menu" text (ypos): */
+
+  for (;;)
+  {
+    int i, j;
+
+RestartInput:
+
+    if (MenuColor != -1)
+    {
+      SelectLine(MenuSelected); /* select current line. */
+
+      /* set new cursor position: */
+      r.a.b.h = 0x02;
+      r.b.b.h = 0;
+      r.d.b.l = 3;
+      r.d.b.h = nMenuLine;
+
+      init_call_intr(0x10, &r);  /* set cursor pos */
+    }
+
+    printf("Select from Menu [");
+
+    for (i = 0, j = 1; i <= 9; i++, j<<=1)
+      if (Menus & j)
+        printf("%c", '0' + i);
+    printf("], or press [ENTER]");
+
+    if (MenuColor != -1)
+      printf(" (Selection=%d) ", MenuSelected);
+
+    if (MenuTimeout >= 0)
+      printf("- %d \b", MenuTimeout);
+    else
+      printf("    \b\b\b\b\b");
+
+    if (MenuColor != -1)
+      printf("\r\n\n  ");
+    else
+      printf(" -");
+
+    printf(" Singlestepping (F8) is: %s \r", singleStep ? "ON " : "OFF");
+
+    key = GetBiosKey(MenuTimeout >= 0 ? 1 : -1);
+
+    if (key == -1)              /* timeout, take default */
+    {
+      if (MenuTimeout > 0)
+      {
+        MenuTimeout--;
+        goto RestartInput;
+      }
+      break;
+    }
+    else
+      MenuTimeout = -1;
+
+    if (key == 0x3f00)          /* F5 */
+    {
+      SkipAllConfig = TRUE;
+      break;
+    }
+    if (key == 0x4200)          /* F8 */
+    {
+      singleStep = !singleStep;
+    }
+    else if(key == 0x4800 && MenuColor != -1)      /* arrow up */
+    {
+      if(MenuSelected>=1 && (Menus & (1 << (MenuSelected-1))) )
+      {
+        MenuSelected--;
+      }
+    }
+    else if(key == 0x5000 && MenuColor != -1)      /* arrow down */
+    {
+      if(MenuSelected<MENULINESMAX-1 && (Menus & (1 << (MenuSelected+1))) )
+      {
+        MenuSelected++;
+      }
+    }
+
+    key &= 0xff;
+
+    if (key == '\r' || key == 0x1b) /* CR/ESC - use default */
+      break;
+
+    if (isnum(key) && (Menus & (1 << (key - '0'))))
+    {
+      MenuSelected = key - '0';
+      break;
+    }
+  }
+  printf("\n");
+
+  /* export the current selected config  menu */
+  sprintf(envp, "CONFIG=%c", MenuSelected+'0');
+  envp += 9;
+  if (MenuColor != -1)
+    ClearScreen(0x7);
+#endif
+}
+
+STATIC VOID CfgMenuDefault(BYTE * pLine)
+{
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
+  COUNT num = 0;
+
+  pLine = skipwh(pLine);
+
+  if ('=' != *pLine)
+  {
+    CfgFailure(pLine);
+    return;
+  }
+  pLine = skipwh(pLine + 1);
+
+  /* Format:  STACKS = stacks [, stackSize]       */
+  pLine = GetNumArg(pLine, &num);
+  MenuSelected = num;
+  pLine = skipwh(pLine);
+
+  if (*pLine == ',')
+  {
+    GetNumArg(++pLine, &MenuTimeout);
+  }
+#endif
+}
+
+STATIC void ClearScreen(unsigned char attr)
+{
+  /* scroll down (newlines): */
+  INIT_LOCAL iregs r;
+  unsigned char rows;
+
+  /* clear */
+  r.a.x = 0x0600;
+  r.b.b.h = attr;
+  r.c.x = 0;
+  r.d.b.l = peekb(0x40, 0x4a) - 1; /* columns */
+  rows = peekb(0x40, 0x84);
+  if (rows == 0) rows = 24;
+  r.d.b.h = rows;
+  init_call_intr(0x10, &r);
+
+  /* move cursor to pos 0,0: */
+  r.a.b.h = 0x02; /* set cursorpos */
+  r.b.b.h = 0;    /* displaypage: */
+  r.d.x = 0;  /* pos 0,0 */
+  init_call_intr(0x10, &r);
+  MenuColor = attr;
+}
+
+/**
+  MENUCOLOR[=] fg[, bg]
+*/
+STATIC void CfgMenuColor(BYTE * pLine)
+{
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
+  int num = 0;
+  unsigned char fg, bg = 0;
+
+  pLine = skipwh(pLine);
+
+  if ('=' == *pLine)
+    pLine = skipwh(pLine + 1);
+
+  pLine = GetNumArg(pLine, &num);
+  if (pLine == 0)
+    return;
+  fg = (unsigned char)num;
+
+  pLine = skipwh(pLine);
+
+  if (*pLine == ',')
+  {
+    pLine = GetNumArg(skipwh(pLine+1), &num);
+    if (pLine == 0)
+      return;
+    bg = (unsigned char)num;
+  }
+  ClearScreen((bg << 4) | fg);
+#endif
+}
+
+/*********************************************************************************
+    National specific things.
+    this handles only Date/Time/Currency, and NOT codepage things.
+    Some may consider this a hack, but I like to see 24 Hour support. tom.
+*********************************************************************************/
+
+#define _DATE_MDY 0 /* mm/dd/yy */
+#define _DATE_DMY 1  /* dd.mm.yy */
+#define _DATE_YMD 2  /* yy/mm/dd */
+
+#define _TIME_12 0
+#define _TIME_24 1
+
+struct CountrySpecificInfoSmall {
+  short CountryID;    /*  = W1 W437   # Country ID */
+  char  DateFormat;           /*    Date format: 0/1/2: U.S.A./Europe/Japan */
+  char  CurrencyString[3];    /* '$' ,'EUR'   */
+  char  ThousandSeparator;    /* ','          # Thousand's separator */
+  char  DecimalPoint;         /* '.'        # Decimal point        */
+  char  DateSeparator;        /* '-'  */
+  char  TimeSeparator;        /* ':'  */
+  char  CurrencyFormat;       /* = 0  # Currency format (bit array)  */
+  char  CurrencyPrecision;    /* = 2  # Currency precision           */
+  char  TimeFormat;           /* = 0  # time format: 0/1: 12/24 houres */
+};
+
+struct CountrySpecificInfoSmall specificCountriesSupported[] = {
+
+/* table rewritten by Bernd Blaauw
+Country ID  : international numbering
+Date format : M = Month, D = Day, Y = Year (4digit); 0=USA, 1=Europe, 2=Japan
+Currency    : $ = dollar, EUR = EURO, United Kingdom uses the pound sign
+Thousands   : separator for thousands (1,000,000 bytes; Dutch: 1.000.000 bytes)
+Decimals    : separator for decimals (2.5KB; Dutch: 2,5KB)
+Datesep     : Date separator (2/4/2004 or 2-4-2004 for example)
+Timesep     : usually ":" is used to separate hours, minutes and seconds
+Currencyf   : Currency format (bit array)
+Currencyp   : Currency precision
+Timeformat  : 0=12 hour format (AM/PM), 1=24 hour format (16:12 means 4:12 PM)
+
+  ID  Date     currency  1000 0.1 date time C digit time       Locale/Country
+-----------------------------------------------------------------------------*/
+{  1,_DATE_MDY,"$"       ,',','.', '/',':', 0 , 2,_TIME_12},/* United States */
+{  2,_DATE_YMD,"$"       ,',','.', '-',':', 0 , 2,_TIME_24},/* Canada French */
+{  3,_DATE_MDY,"$"       ,',','.', '/',':', 0 , 2,_TIME_12},/* Latin America */
+{  7,_DATE_DMY,"RUB"     ,' ',',', '.',':', 3 , 2,_TIME_24},/* Russia        */
+{ 31,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Netherlands   */
+{ 32,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Belgium       */
+{ 33,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* France        */
+{ 34,_DATE_DMY,"EUR"     ,'.','\'','-',':', 0 , 2,_TIME_24},/* Spain         */
+{ 36,_DATE_DMY,"$HU"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Hungary       */
+{ 38,_DATE_DMY,"$YU"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Yugoslavia    */
+{ 39,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Italy         */
+{ 41,_DATE_DMY,"SF"      ,'.',',', '.',':', 0 , 2,_TIME_24},/* Switserland   */
+{ 42,_DATE_YMD,"$YU"     ,'.',',', '.',':', 0 , 2,_TIME_24},/* Czech/Slovakia*/
+{ 44,_DATE_DMY,"\x9c"    ,'.',',', '/',':', 0 , 2,_TIME_24},/* United Kingdom*/
+{ 45,_DATE_DMY,"DKK"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Denmark       */
+{ 46,_DATE_YMD,"SEK"     ,',','.', '-',':', 0 , 2,_TIME_24},/* Sweden        */
+{ 47,_DATE_DMY,"NOK"     ,',','.', '.',':', 0 , 2,_TIME_24},/* Norway        */
+{ 48,_DATE_YMD,"PLN"     ,',','.', '.',':', 0 , 2,_TIME_24},/* Poland        */
+{ 49,_DATE_DMY,"EUR"     ,'.',',', '.',':', 1 , 2,_TIME_24},/* Germany       */
+{ 54,_DATE_DMY,"$ar"     ,'.',',', '/',':', 1 , 2,_TIME_12},/* Argentina     */
+{ 55,_DATE_DMY,"$ar"     ,'.',',', '/',':', 1 , 2,_TIME_24},/* Brazil        */
+{ 61,_DATE_MDY,"$"       ,'.',',', '/',':', 0 , 2,_TIME_24},/* Int. English  */
+{ 81,_DATE_YMD,"\x81\x8f",',','.', '/',':', 0 , 2,_TIME_12},/* Japan         */
+{351,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Portugal      */
+#else
 
 /*
     moved from BLOCKIO.C here.
@@ -2601,6 +3749,7 @@ Timeformat  : 0=12 hour format (AM/PM), 1=24 hour format (16:12 means 4:12 PM)
 { 61,_DATE_MDY,"$"       ,'.',',', '/',':', 0 , 2,_TIME_24},/* Int. English  */
 { 81,_DATE_YMD,"\x81\x8f",',','.', '/',':', 0 , 2,_TIME_12},/* Japan         */
 {351,_DATE_DMY,"EUR"     ,'.',',', '-',':', 0 , 2,_TIME_24},/* Portugal      */
+#endif
 {358,_DATE_DMY,"EUR"     ,' ',',', '.',':',0x3, 2,_TIME_24},/* Finland       */
 {359,_DATE_DMY,"BGL"     ,' ',',', '.',':', 3 , 2,_TIME_24},/* Bulgaria      */
 {380,_DATE_DMY,"UAH"     ,' ',',', '.',':', 3 , 2,_TIME_24},/* Ukraine       */
@@ -2704,7 +3853,11 @@ STATIC VOID CmdInstall(BYTE * pLine)
 }
 STATIC VOID CmdInstallHigh(BYTE * pLine)
 {
+#if defined(PC88VA)
+  CfgFailure(pLine);
+#else
   _CmdInstall(pLine,0x80);	/* load high, if possible */
+#endif
 }
 STATIC VOID CmdChain(BYTE * pLine)
 {
@@ -2729,7 +3882,12 @@ STATIC VOID CmdChain(BYTE * pLine)
 
 STATIC VOID InstallExec(struct instCmds *icmd)
 {
+#if defined(PC88VA)
+  INIT_LOCAL BYTE filename[128];
+  BYTE *args, *d, *cmd = icmd->buffer;
+#else
   BYTE filename[128], *args, *d, *cmd = icmd->buffer;
+#endif
   exec_blk exb;
 
   InstallPrintf(("installing %s\n",cmd));
@@ -2764,8 +3922,13 @@ STATIC VOID InstallExec(struct instCmds *icmd)
 
 STATIC void free(seg segment)
 {
+#if defined(PC88VA)
+  INIT_LOCAL iregs r;
+
+#else
   iregs r;
 
+#endif
   r.a.b.h = 0x49;				/* free memory	*/
   r.es  = segment;
   init_call_intr(0x21, &r);
@@ -2774,8 +3937,13 @@ STATIC void free(seg segment)
 /* set memory allocation strategy */
 STATIC void set_strategy(unsigned char strat)
 {
+#if defined(PC88VA)
+  INIT_LOCAL iregs r;
+
+#else
   iregs r;
 
+#endif
   r.a.x = 0x5801;
   r.b.b.l = strat;
   init_call_intr(0x21, &r);
@@ -2798,6 +3966,7 @@ VOID DoInstall(void)
      that will be executing soon
   */
 
+#if !defined(PC88VA)
   set_strategy(LAST_FIT);
   installMemory = ((unsigned)_init_end + ebda_size + 15) / 16;
 #ifdef __WATCOMC__
@@ -2807,6 +3976,10 @@ VOID DoInstall(void)
 
   InstallPrintf(("allocated memory at %x\n",installMemory));
 
+#else
+  installMemory = 0; /* INIT is already reserved by the VA boot MCB. */
+#endif
+
   for (i = 0, cmd = InstallCommands; i < numInstallCmds; i++, cmd++)
   {
     InstallPrintf(("%d:%s\n",i,cmd->buffer));
@@ -2814,7 +3987,10 @@ VOID DoInstall(void)
     InstallExec(cmd);
   }
   set_strategy(FIRST_FIT);
-  free(installMemory);
+#if defined(PC88VA)
+  if (installMemory)
+#endif
+    free(installMemory);
 
   InstallPrintf(("Done with installing commands\n"));
   return;

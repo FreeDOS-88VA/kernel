@@ -115,8 +115,12 @@ intvec getvec(unsigned char intno);
 #define NSTACKS         8       /* number of stacks             */
 #define STACKSIZE       256     /* default stacksize            */
 #define NLAST           5       /* last drive                   */
+#if defined(PC88VA)
+#define NUMBUFF         10      /* 10 KiB sector data; metadata is additional */
+#else
 #define NUMBUFF         20      /* Number of track buffers at INIT time     */
                                         /* -- must be at least 3        */
+#endif
 #define MAX_HARD_DRIVE  8
 #define NDEV            26      /* up to Z:                     */
 
@@ -169,14 +173,21 @@ extern void ASM DosIdle_hlt(VOID);
  */
 unsigned ASMPASCAL init_call_intr(int nr, iregs * rp);
 
-unsigned ASMPASCAL read(int fd, void *buf, unsigned count);
+#if defined(PC88VA)
+#define INITPTR FAR
+#define INIT_LOCAL static
+#else
+#define INITPTR
+#define INIT_LOCAL
+#endif
+unsigned ASMPASCAL read(int fd, void INITPTR *buf, unsigned count);
 int ASMPASCAL open(const char *pathname, int flags);
 int ASMPASCAL close(int fd);
 int ASMPASCAL dup2(int oldfd, int newfd);
 ULONG ASMPASCAL lseek(int fd, long position);
 seg ASMPASCAL allocmem(UWORD size);
 void ASMPASCAL init_PSPSet(seg psp_seg);
-int ASMPASCAL init_DosExec(int mode, exec_blk * ep, char * lp);
+int ASMPASCAL init_DosExec(int mode, exec_blk INITPTR * ep, char * lp);
 int ASMPASCAL init_setdrive(int drive);
 int ASMPASCAL init_switchar(int chr);
 void ASMPASCAL keycheck(void);
@@ -228,7 +239,7 @@ VOID ASMCFUNC FAR init_call_p_0(struct config FAR *Config); /* P_0, actually */
 /* main.c */
 VOID ASMCFUNC FreeDOSmain(void);
 BOOL init_device(struct dhdr FAR * dhp, char * cmdLine,
-                      COUNT mode, char FAR **top);
+                      COUNT mode, char FAR * INITPTR *top);
 VOID init_fatal(BYTE * err_msg);
 
 /* prf.c */
@@ -247,7 +258,16 @@ extern unsigned CurrentKernelSegment;
 extern struct _KernelConfig FAR ASM LowKernelConfig;
 extern WORD days[2][13];
 extern BYTE FAR *lpTop;
-extern BYTE ASM _ib_start[], ASM _ib_end[], ASM _init_end[];
+extern BYTE ASM _ib_start[], ASM _ib_end[];
+#if defined(PC88VA)
+/* _init_end is not the full startup-stack boundary on PC-88VA. */
+extern BYTE FAR ASM _init_end[];
+extern BYTE FAR ASM _pc88va_stack_end[];
+/* Return the MZ load segment of the resident initial image. */
+extern unsigned FAR ASMPASCAL pc88va_image_segment(void);
+#else
+extern BYTE ASM _init_end[];
+#endif
 extern UWORD ram_top;               /* How much ram in Kbytes               */
 extern char singleStep;
 extern char SkipAllConfig;
@@ -340,4 +360,3 @@ ULONG ASMCFUNC FAR MULULUL(ULONG mul1, ULONG mul2);     /* MULtiply ULong by ULo
 ULONG ASMCFUNC FAR DIVULUS(ULONG mul1, UWORD mul2);     /* DIVide ULong by UShort */
 ULONG ASMCFUNC FAR DIVMODULUS(ULONG mul1, UWORD mul2, UWORD * rem);     /* DIVide ULong by UShort */
 #endif
-

@@ -50,7 +50,12 @@ struct lol {
   unsigned char njoined;       /* 34 number of joined devices             */
   unsigned short specialptr;   /* 35 pointer to list of spec. prog(unused)*/
   void far *setverPtr;         /* 37 pointer to SETVER list               */
+#if defined(PC88VA)
+  /* The PC-88VA List-of-Lists stores this entry as a 16-bit code offset. */
+  void (NEAR *a20ptr)(void);   /* 3b pointer to fix A20 ctrl              */
+#else
   void (*a20ptr)(void);        /* 3b pointer to fix A20 ctrl              */
+#endif
   unsigned short recentpsp;    /* 3d PSP of most recently exec'ed prog    */
   unsigned short nbuffers;     /* 3f Number of buffers                    */
   unsigned short nlookahead;   /* 41 Number of lookahead buffers          */
@@ -89,3 +94,15 @@ struct lol {
 #endif
 };
 
+#if defined(PC88VA) && !defined(PC88VA_LOL_LAYOUT_CHECKED)
+#define PC88VA_LOL_LAYOUT_CHECKED
+/* kernel.asm reserves one word for a20ptr and keeps the following fields at
+ * these offsets.  A medium-model far function pointer would add two bytes
+ * and make C access a different List-of-Lists object than assembly access. */
+typedef char pc88va_lol_a20ptr_width
+  [(sizeof(((struct lol *)0)->a20ptr) == 2) ? 1 : -1];
+typedef char pc88va_lol_firstbuf_offset
+  [((unsigned)(void *)&(((struct lol *)0)->firstbuf) == 0x6d) ? 1 : -1];
+typedef char pc88va_lol_deblock_buf_offset
+  [((unsigned)(void *)&(((struct lol *)0)->deblock_buf) == 0x7a) ? 1 : -1];
+#endif

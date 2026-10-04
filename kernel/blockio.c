@@ -374,6 +374,9 @@ UWORD dskxfer(COUNT dsk, ULONG blkno, VOID FAR * buf, UWORD numblocks,
               COUNT mode)
 {
   register struct dpb FAR *dpbp = get_dpb(dsk);
+#if defined(PC88VA)
+  UWORD generation = media_generation;
+#endif
   if (dpbp == NULL)
   {
     return 0x0201;              /* illegal command */
@@ -393,6 +396,13 @@ UWORD dskxfer(COUNT dsk, ULONG blkno, VOID FAR * buf, UWORD numblocks,
 
   for (;;)
   {
+#if defined(PC88VA)
+    /* Keep the original request binding across INT24. Revalidation is for
+       a new pathname operation, never permission to replay this buffer. */
+    if (generation != media_generation || !media_check_io(dpbp)
+        || generation != media_generation)
+      return S_ERROR | S_DONE | E_NOTRDY;
+#endif
     IoReqHdr.r_length = sizeof(request);
     IoReqHdr.r_unit = dpbp->dpb_subunit;
 

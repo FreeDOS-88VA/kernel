@@ -58,6 +58,18 @@ void far *DynAlloc(char *what, unsigned num, unsigned size)
   void far *now;
   unsigned total = num * size;
   struct DynS far *Dynp = MK_FP(FP_SEG(LoL), FP_OFF(&Dyn));
+#if defined(PC88VA)
+  ULONG first = ((ULONG)FP_SEG(Dynp) << 4) + FP_OFF(Dynp) +
+                sizeof(Dynp->Allocated);
+  ULONG end = ((ULONG)FP_SEG(_HMATextEnd) << 4) + FP_OFF(_HMATextEnd);
+  /* MoveKernel has retired the original HMA bytes before the first DDT.
+     Never let a dynamic NEAR allocation spill into the following code. */
+  if (CurrentKernelSegment == 0 || end < first || end - first > 0xffffUL ||
+      (ULONG)num * size > 0xffffUL || Dynp->Allocated > end - first ||
+      (ULONG)total > end - first - Dynp->Allocated ||
+      (ULONG)FP_OFF(Dynp->Buffer) + Dynp->Allocated + total > 0x10000UL)
+    init_fatal("PC88VA near arena");
+#endif
 
 #ifndef DEBUG
   UNREFERENCED_PARAMETER(what);

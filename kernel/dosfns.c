@@ -210,6 +210,9 @@ long DosRWSft(int sft_idx, size_t n, void FAR * bp, int mode)
 {
   /* Get the SFT block that contains the SFT      */
   sft FAR *s = idx_to_sft(sft_idx);
+#if defined(PC88VA)
+  long result;
+#endif
 
   if (FP_OFF(s) == (size_t) - 1)
   {
@@ -303,7 +306,14 @@ long DosRWSft(int sft_idx, size_t n, void FAR * bp, int mode)
       return rc;
   }
   /* /// End of additions for SHARE - Ron Cemer */
+#if defined(PC88VA)
+  if (!media_check_sft(s))
+    return DE_INVLDHNDL;
+  result = rwblock(sft_idx, bp, n, mode);
+  return s->sft_flags & SFT_FSTALE ? DE_INVLDHNDL : result;
+#else
   return rwblock(sft_idx, bp, n, mode);
+#endif
 }
 
 COUNT SftSeek(int sft_idx, LONG new_pos, unsigned mode)
@@ -718,9 +728,19 @@ COUNT DosCloseSft(int sft_idx, BOOL commitonly)
   }
 
   /* else call file system handler                     */
+#if defined(PC88VA)
+  result = media_check_sft(sftp) ? dos_close(sft_idx) : DE_INVLDHNDL;
+  if (sftp->sft_flags & SFT_FSTALE)
+    result = DE_INVLDHNDL;
+  /* DosClose has already removed the PSP handle. Still release its SFT
+     reference on a stale close; commit alone must not release a reference. */
+  if (commitonly || (result != SUCCESS && !(sftp->sft_flags & SFT_FSTALE)))
+    return result;
+#else
   result = dos_close(sft_idx);
   if (commitonly || result != SUCCESS)
     return result;
+#endif
 
 /* /// Added for SHARE *** CURLY BRACES ADDED ALSO!!! ***.  - Ron Cemer */
   if (sftp->sft_count == 1 && IsShareInstalled(TRUE))
@@ -731,7 +751,11 @@ COUNT DosCloseSft(int sft_idx, BOOL commitonly)
   }
 /* /// End of additions for SHARE.  - Ron Cemer */
   sftp->sft_count -= 1;
+#if defined(PC88VA)
+  return result;
+#else
   return SUCCESS;
+#endif
 }
 
 COUNT DosClose(COUNT hndl)

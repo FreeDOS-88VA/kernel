@@ -29,7 +29,13 @@
 #include "init-mod.h"
 #include "dyndata.h"
 
+#if defined(PC88VA)
+#define FLOPPY_SEC_SIZE 1024u /* M12 PC-88VA logical sector */
+extern unsigned short pc88va_m13_before_dsk_print_probe(void);
+extern unsigned short pc88va_m13_after_dsk_print_probe(void);
+#else
 #define FLOPPY_SEC_SIZE 512u  /* common sector size */
+#endif
 
 UBYTE InitDiskTransferBuffer[MAX_SEC_SIZE] BSS_INIT({0});
 COUNT nUnits BSS_INIT(0);
@@ -250,6 +256,11 @@ BOOL ExtLBAForce = FALSE;
 
 COUNT init_readdasd(UBYTE drive)
 {
+#if defined(PC88VA)
+  /* The VA BIOS exposes two independent physical floppy units.  AH=09 is
+     the door-change query used to invalidate common FAT buffers. */
+  return drive < 2 ? DF_CHANGELINE : DF_NOACCESS;
+#else
   static iregs regs;
 
   regs.a.b.h = 0x15;
@@ -264,6 +275,7 @@ COUNT init_readdasd(UBYTE drive)
         return DF_FIXED;
     }
   return 0;
+#endif
 }
 
 typedef struct {
@@ -290,6 +302,24 @@ floppy_bpb floppy_bpbs[5] = {
 
 COUNT init_getdriveparm(UBYTE drive, bpb * pbpbarray)
 {
+#if defined(PC88VA)
+  if (drive > 1 || pbpbarray == NULL)
+    return 0;
+  memset(pbpbarray, 0, sizeof(*pbpbarray));
+  pbpbarray->bpb_nbyte = 1024;
+  pbpbarray->bpb_nsector = 1;
+  pbpbarray->bpb_nreserved = 1;
+  pbpbarray->bpb_nfat = 2;
+  pbpbarray->bpb_ndirent = 192;
+  pbpbarray->bpb_nsize = 1280;
+  pbpbarray->bpb_mdesc = 0xfe;
+  pbpbarray->bpb_nfsect = 2;
+  pbpbarray->bpb_nsecs = 8;
+  pbpbarray->bpb_nheads = 2;
+  pbpbarray->bpb_hidden = 0;
+  pbpbarray->bpb_huge = 0;
+  return 0;
+#else
   static iregs regs;
   REG UBYTE type;
 
@@ -318,6 +348,7 @@ COUNT init_getdriveparm(UBYTE drive, bpb * pbpbarray)
 
   /* 0=320-360kB, 1=1.2MB, 2=720kB, 8=any odd ball drives */
   return type;
+#endif
 }
 
 /*
@@ -1258,6 +1289,20 @@ STATIC void make_ddt (ddt *pddt, int Unit, int driveno, int flags)
 
 void ReadAllPartitionTables(void)
 {
+#if defined(PC88VA)
+  /* The medium-model near-pointer ABI addresses data through DS.  The
+     initialization stack has a distinct SS, so a local ddt would be passed
+     as DS:BP-relative-offset and read from the wrong physical region.  Keep
+     this one-shot initialization record in DGROUP instead. */
+  static ddt nddt[2];
+  memset(nddt, 0, sizeof(nddt));
+  make_ddt(&nddt[0], 0, 0, 0);
+  /* B: remains inaccessible until its first BPB probe identifies a supported
+     physical medium; a default A: profile must never alias an unknown disk. */
+  make_ddt(&nddt[1], 1, 1, DF_NOACCESS);
+  nUnits = 2;
+  return;
+#else
   UBYTE foundPartitions[MAX_HARD_DRIVE];
 
   int HardDrive;
@@ -1377,11 +1422,21 @@ void ReadAllPartitionTables(void)
     }
   }
 }
+#endif
+#if defined(PC88VA)
+}
+#endif
 
 /* disk initialization: returns number of units */
 COUNT dsk_init()
 {
+#if defined(PC88VA)
+  (void)pc88va_m13_before_dsk_print_probe();
+#endif
   printf(" - InitDisk");
+#if defined(PC88VA)
+  (void)pc88va_m13_after_dsk_print_probe();
+#endif
 
 #ifdef DEBUG
   {
@@ -1392,8 +1447,12 @@ COUNT dsk_init()
   }
 #endif
 
-  /* Reset the drives                                             */
+  /* The PC-88VA adapter owns media state and deliberately has no BIOS
+     INT 13h reset operation.  Its M12 callback performs only validated
+     reads; resetting here would bypass that ownership boundary. */
+#if !defined(PC88VA)
   BIOS_drive_reset(0);
+#endif
 
   ReadAllPartitionTables();
 

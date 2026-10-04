@@ -65,6 +65,9 @@
 
 #include "portab.h"
 #include "init-mod.h"
+#if defined(PC88VA)
+#include "../pc88va/kernel/m13_layout.h"
+#endif
 
 #ifdef VERSION_STRINGS
 static BYTE *RcsId =
@@ -321,7 +324,13 @@ void MoveKernel(unsigned NewKernelSegment)
       MK_FP(CurrentKernelSegment, (FP_OFF(_HMATextStart) & 0xfff0));
   HMADest = MK_FP(NewKernelSegment, 0x0000);
 
+#if defined(PC88VA)
+  /* The linker end is exclusive. Rounding with OR would add a paragraph
+     when that end is already aligned, disagreeing with the seeded copy. */
+  len = (FP_OFF(_HMATextEnd) - (FP_OFF(_HMATextStart) & 0xfff0) + 15U) & 0xfff0;
+#else
   len = (FP_OFF(_HMATextEnd) | 0x000f) - (FP_OFF(_HMATextStart) & 0xfff0);
+#endif
 
   if (NewKernelSegment == 0xffff)
   {
@@ -333,10 +342,18 @@ void MoveKernel(unsigned NewKernelSegment)
   HMAInitPrintf(("HMA moving %p up to %p for %04x bytes\n",
                  HMASource, HMADest, len));
 
+#if defined(PC88VA)
+  /* The carrier seeded the final copy and enumerated its MZ fixups before
+     any C helper call. Never discover fixups by scanning arbitrary opcodes. */
+  if (m13_layout.version != 1 || jmpseg != 0 ||
+      NewKernelSegment != m13_layout.resident_text_segment)
+    init_fatal("PC88VA assembly placement");
+#else
   if (NewKernelSegment < CurrentKernelSegment ||
       NewKernelSegment == 0xffff)
     fmemcpy(HMADest, HMASource, len);
   /* else it's the very first relocation: handled by kernel.asm */
+#endif
 
   HMAFree = (FP_OFF(HMADest) + len + 0xf) & 0xfff0;
   /* first free byte after HMA_TEXT on 16 byte boundary */
@@ -408,4 +425,3 @@ void MoveKernel(unsigned NewKernelSegment)
 errorReturn:
   for (;;) ;
 }
-

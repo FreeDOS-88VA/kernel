@@ -126,6 +126,12 @@ int dos_open(char *path, unsigned flags, unsigned attrib, int fd)
   REG f_node_ptr fnp = sft_to_fnode(fd);
   int status = find_fname(path, D_ALL | attrib, fnp);
 
+#if defined(PC88VA)
+  /* The new slot is unbound during the initial pathname revalidation.
+     Bind before any create/truncate work so a later change also stales it. */
+  if (status == SUCCESS || status == DE_FILENOTFND)
+    idx_to_sft(fd)->sft_dcb = fnp->f_dpb;
+#endif
   /* Check that we don't have a duplicate name, so if we  */
   /* find one, truncate it (O_CREAT).                     */
   if (status == SUCCESS)
@@ -200,6 +206,10 @@ int dos_open(char *path, unsigned flags, unsigned attrib, int fd)
   fnp->f_cluster = getdstart(fnp->f_dpb, &fnp->f_dir);
 
   fnode_to_sft(fnp);
+#if defined(PC88VA)
+  if (idx_to_sft(fd)->sft_flags & SFT_FSTALE)
+    return DE_INVLDHNDL;
+#endif
   return status;
 }
 
@@ -349,6 +359,9 @@ STATIC int merge_file_changes(f_node_ptr fnp, int collect)
     for(j = sp->sftt_count, sftp = sp->sftt_table; --j >= 0; sftp++, i++)
     {
       if (i != fnp->f_sft_idx && sftp->sft_count != 0
+#if defined(PC88VA)
+          && !(sftp->sft_flags & SFT_FSTALE)
+#endif
           && fnp->f_dpb == sftp->sft_dcb
           && (fnp->f_dir.dir_attrib & D_VOLID) == 0
           && (sftp->sft_attrib & D_VOLID) == 0
@@ -1656,10 +1669,10 @@ ckok:;
   }
 #endif
 }
-
-STATIC int rqblockio(unsigned char command, struct dpb FAR * dpbp)
+#if defined(PC88VA)
+/* Fill only the media request packet, never the active sector-I/O packet. */
+STATIC void media_request(unsigned char command, struct dpb FAR *dpbp)
 {
- retry:
   MediaReqHdr.r_length = sizeof(request);
   MediaReqHdr.r_unit = dpbp->dpb_subunit;
   MediaReqHdr.r_command = command;
@@ -1669,8 +1682,81 @@ STATIC int rqblockio(unsigned char command, struct dpb FAR * dpbp)
   if (command == C_BLDBPB) /* help USBASPI.SYS & DI1000DD.SYS (TE) */
     MediaReqHdr.r_bpfat = (boot FAR *)DiskTransferBuffer;
   execrh((request FAR *) & MediaReqHdr, dpbp->dpb_device);
+}
+
+/* DOS block requests are synchronous. Any media invalidation during a
+   critical-error callback also invalidates the suspended request. A change
+   on another unit may conservatively stop it; no per-SFT layout is extended. */
+UWORD media_generation;
+
+VOID media_invalidate(struct dpb FAR *dpbp)
+{
+  sfttbl FAR *sp;
+  ++media_generation;
+  dpbp->dpb_flags = M_CHANGED;
+  setinvld(dpbp->dpb_unit);
+  for (sp = sfthead; sp != (sfttbl FAR *)-1; sp = sp->sftt_next)
+  {
+    int i;
+    sft FAR *s = sp->sftt_table;
+    for (i = sp->sftt_count; --i >= 0; ++s)
+      if (s->sft_count && !(s->sft_flags & (SFT_FDEVICE | SFT_FSHARED))
+          && s->sft_dcb == dpbp)
+        s->sft_flags |= SFT_FSTALE;
+  }
+}
+
+/* Existing operations must not rebuild their binding to another medium.
+   Do not invoke INT24 from this check: it is also used before cache flushes
+   and on an existing request's retry path. A pathname operation may later
+   rebuild the BPB through media_check and open a new, non-stale handle. */
+BOOL media_check_io(struct dpb FAR *dpbp)
+{
+  if (dpbp == NULL)
+    return FALSE;
+  if (dpbp->dpb_flags == (UBYTE)M_CHANGED)
+  {
+    media_invalidate(dpbp);
+    return FALSE;
+  }
+  media_request(C_MEDIACHK, dpbp);
+  if ((MediaReqHdr.r_status & (S_ERROR | S_DONE)) != S_DONE
+      || MediaReqHdr.r_mcretcode != M_NOT_CHANGED)
+  {
+    media_invalidate(dpbp);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+BOOL media_check_sft(sft FAR *sftp)
+{
+  return !(sftp->sft_flags & SFT_FSTALE) && media_check_io(sftp->sft_dcb)
+      && !(sftp->sft_flags & SFT_FSTALE);
+}
+#endif
+
+STATIC int rqblockio(unsigned char command, struct dpb FAR * dpbp)
+{
+ retry:
+#if defined(PC88VA)
+  media_request(command, dpbp);
+#else
+  MediaReqHdr.r_length = sizeof(request);
+  MediaReqHdr.r_unit = dpbp->dpb_subunit;
+  MediaReqHdr.r_command = command;
+  MediaReqHdr.r_mcmdesc = dpbp->dpb_mdb;
+  MediaReqHdr.r_status = 0;
+
+  if (command == C_BLDBPB) /* help USBASPI.SYS & DI1000DD.SYS (TE) */
+    MediaReqHdr.r_bpfat = (boot FAR *)DiskTransferBuffer;
+  execrh((request FAR *) & MediaReqHdr, dpbp->dpb_device);
+#endif
   if ((MediaReqHdr.r_status & S_ERROR) || !(MediaReqHdr.r_status & S_DONE))
   {
+#if defined(PC88VA)
+    media_invalidate(dpbp);
+#endif
     FOREVER
     {
       switch (block_error(&MediaReqHdr, dpbp->dpb_unit, dpbp->dpb_device, 0))
@@ -1683,7 +1769,12 @@ STATIC int rqblockio(unsigned char command, struct dpb FAR * dpbp)
         goto retry;
 
       case CONTINUE:
+#if defined(PC88VA)
+        /* Ignoring a failed probe cannot establish a valid media binding. */
+        return DE_INVLDDRV;
+#else
         return SUCCESS;
+#endif
       }
     }
   }
@@ -1712,14 +1803,20 @@ COUNT media_check(REG struct dpb FAR * dpbp)
     case M_DONT_KNOW:
       /* IBM PCDOS technical reference says to call BLDBPB if */
       /* there are no used buffers                            */
+#if !defined(PC88VA)
       if (dirty_buffers(dpbp->dpb_unit))
         return SUCCESS;
+#endif
 
       /* If it definitely changed, don't know (falls through) */
       /* or has been changed, rebuild the bpb.                */
     /* case M_CHANGED: */
     default:
+#if defined(PC88VA)
+      media_invalidate(dpbp);
+#else
       setinvld(dpbp->dpb_unit);
+#endif
       ret = rqblockio(C_BLDBPB, dpbp);
       if (ret < SUCCESS)
         return ret;
@@ -1770,6 +1867,11 @@ STATIC void fnode_to_sft(f_node_ptr fnp)
 {
   sft FAR *sftp = idx_to_sft(fnp->f_sft_idx);
 
+#if defined(PC88VA)
+  /* An in-flight operation must not overwrite a newly set stale flag. */
+  if (sftp->sft_flags & SFT_FSTALE)
+    return;
+#endif
   sftp->sft_flags = fnp->f_flags;
 
   sftp->sft_attrib = fnp->f_dir.dir_attrib;

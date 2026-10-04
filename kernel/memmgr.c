@@ -29,6 +29,10 @@
 #include "portab.h"
 #include "globals.h"
 
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+#include "../pc88va/kernel/m13_diag.h"
+#endif
+
 #ifdef VERSION_STRING
 static BYTE *memmgrRcsId =
     "$Id: memmgr.c 1338 2007-07-20 20:52:33Z mceric $";
@@ -78,6 +82,75 @@ STATIC COUNT joinMCBs(seg para)
   return SUCCESS;
 }
 
+#if defined(PC88VA)
+extern UWORD pc88va_boot_mcb, pc88va_boot_top;
+/* Resident reason retained for the caller; failures still return an error. */
+BYTE *pc88va_boot_error;
+
+/* Called once, on the permanent P_0 stack, after copying its configuration.
+   No initialization code or early-buffer pointer may survive this barrier. */
+COUNT pc88va_release_boot_memory(void)
+{
+  seg cur = first_mcb;
+  seg previous = 0;
+  mcb FAR *p;
+  ULONG next;
+  ULONG limit = (ULONG)pc88va_boot_mcb << 4;
+  ULONG buffers = ((ULONG)FP_SEG(firstbuf) << 4) + FP_OFF(firstbuf);
+  ULONG cds = ((ULONG)FP_SEG(CDSp) << 4) + FP_OFF(CDSp);
+
+  if (pc88va_boot_mcb == 0)
+    {
+      pc88va_boot_error = "PC88VA boot MCB missing";
+      return DE_MCBDESTRY;
+    }
+  if (_SS != FP_SEG((UWORD FAR *)&first_mcb))
+    {
+      pc88va_boot_error = "PC88VA boot stack segment";
+      return DE_MCBDESTRY;
+    }
+  if (buffers + (ULONG)LoL_nbuffers *
+        (sizeof(struct buffer) - BUFFERSIZE + maxsecsize) > limit)
+    {
+      pc88va_boot_error = "PC88VA boot buffers live";
+      return DE_MCBDESTRY;
+    }
+  if (cds + (ULONG)lastdrive * sizeof(struct cds) > limit)
+    {
+      pc88va_boot_error = "PC88VA boot CDS live";
+      return DE_MCBDESTRY;
+    }
+  while (cur < pc88va_boot_mcb)
+  {
+    p = para2far(cur);
+    next = (ULONG)cur + p->m_size + 1UL;
+    if (p->m_type != MCB_NORMAL || next > pc88va_boot_mcb)
+      {
+        pc88va_boot_error = "PC88VA boot MCB chain";
+        return DE_MCBDESTRY;
+      }
+    previous = cur;
+    cur = (seg)next;
+  }
+  p = para2far(cur);
+  if (cur != pc88va_boot_mcb || p->m_type != MCB_LAST || p->m_psp != 8 ||
+      (ULONG)cur + p->m_size + 1UL != pc88va_boot_top)
+    {
+      pc88va_boot_error = "PC88VA boot reservation";
+      return DE_MCBDESTRY;
+    }
+  if (DosMemFree(cur) != SUCCESS)
+    {
+      pc88va_boot_error = "PC88VA boot free";
+      return DE_MCBDESTRY;
+    }
+  pc88va_boot_mcb = 0;
+  if (previous != 0 && mcbFree(para2far(previous)))
+    return joinMCBs(previous);
+  return SUCCESS;
+}
+#endif
+
 /*
  * Return a normalized far pointer
  */
@@ -115,6 +188,9 @@ COUNT DosMemAlloc(UWORD size, COUNT mode, seg *para, UWORD *asize)
   REG mcb FAR *p;
   mcb FAR *foundSeg;
   mcb FAR *biggestSeg;
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  static unsigned char diag_mcb_dumped;
+#endif
   /* Initialize                                           */
 
 searchAgain:
@@ -202,6 +278,30 @@ searchAgain:
     }
     if (asize)
       *asize = biggestSeg ? biggestSeg->m_size : 0;
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+    if (size >= 0x0100U && size != 0xffffU)
+    {
+      pc88va_m13_diag_memalloc_failure(size, (unsigned short)mode,
+                                        biggestSeg ? biggestSeg->m_size : 0,
+                                        first_mcb, cu_psp);
+      if (!diag_mcb_dumped)
+      {
+        mcb FAR *diag_p = para2far(first_mcb);
+        unsigned short diag_index = 0;
+        while (diag_index < 8 && mcbValid(diag_p))
+        {
+          pc88va_m13_diag_mcb(diag_index, FP_SEG(diag_p),
+                              diag_p->m_type, diag_p->m_psp,
+                              diag_p->m_size);
+          ++diag_index;
+          if (diag_p->m_type == MCB_LAST)
+            break;
+          diag_p = nxtMCB(diag_p);
+        }
+        diag_mcb_dumped = 1;
+      }
+    }
+#endif
     return DE_NOMEM;
   }
 
@@ -492,4 +592,3 @@ void DosUmbLink(unsigned n)
 }
 
 #endif
-

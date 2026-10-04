@@ -47,6 +47,10 @@ bin/country.sys
 bin/SETVER.SYS
 bin/setver.sys
 
+# M06 PC-88VA compile-only target outputs
+pc88va/build/
+pc88va/bin/
+
 # backup files
 *.orig
 *~

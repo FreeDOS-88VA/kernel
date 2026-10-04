@@ -1,7 +1,10 @@
 ;  this one adapted from elks, http://elks.sourceforge.net
 ;  multiply cx:bx * dx:ax, result in dx:ax        
 
-%macro LMULU 0
+; The default entry is used by near-call wrappers. The optional argument
+; selects the FAR-call ABI used by the Open Watcom runtime exports placed in
+; HMA_TEXT (medium-model callers emit FAR calls).
+%macro LMULU 0-1
 
         push    si
         push    cx
@@ -16,13 +19,19 @@
         add     dx, cx   ; dx = high(_bx*_ax)+low(_cx*_ax + _dx*_bx)
         pop     cx
         pop     si
-	ret
+%if %0
+        retf
+%else
+        ret
+%endif
 
 %endmacro
 
 ;  divide dx:ax / cx:bx, quotient in dx:ax, remainder in cx:bx
 
-%macro LDIVMODU 0
+; Keep the historical near form by default and allow the HMA runtime entry
+; points to request a FAR return explicitly.
+%macro LDIVMODU 0-1
 ; this one is adapted from an assembly gem:
 ; gem writer: Norbert Juffa, norbert.juffa@amd.com
 
@@ -77,7 +86,11 @@
 	mov     bx, dx             ; bx = remainder-lo
 	mov     dx, cx             ; dx = quotient-hi(quotient in dx:ax)
 	xor     cx, cx             ; cx = remainder-hi (rem. in cx:bx)
-	ret
+%if %0
+        retf
+%else
+        ret
+%endif
 
 %%big_divisor:
 	push    si                 ; save temp
@@ -114,7 +127,11 @@
 	xor     dx, dx             ; clear hi-word of quot (ax<=FFFFh) dx := 0
 	pop     di                 ; restore temp  
 	pop     si                 ;  variables
-	ret
+%if %0
+        retf
+%else
+        ret
+%endif
 
 %endmacro
 

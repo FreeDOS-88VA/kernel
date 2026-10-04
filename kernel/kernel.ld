@@ -19,6 +19,10 @@ INITSIZE = SIZEOF(.itext) + SIZEOF(.idata) + SIZEOF(.ibss);
 
 SECTIONS
   {
+		/* PC-88VA M16 symbols are supplied by the target adapter when linked. */
+		PROVIDE(PC88VA_M16_PROBE_READ = 0);
+		PROVIDE(PC88VA_M16_SET_PROFILE = 0);
+
     /* Fabricate a .exe header here.  Although libbfd does have an
        "i386msdos" back-end which produces an "MZ" exe header, it cannot do
        certain things (yet). */
@@ -125,6 +129,8 @@ SECTIONS
 		_fl_readkey = FL_READKEY;
 		_fl_lba_ReadWrite = FL_LBA_READWRITE;
 		_floppy_change = FLOPPY_CHANGE;
+		_pc88va_m16_probe_read = PC88VA_M16_PROBE_READ;
+		_pc88va_m16_set_profile = PC88VA_M16_SET_PROFILE;
 		_ReadPCClock = READPCCLOCK;
 		_WritePCClock = WRITEPCCLOCK;
 		_WriteATClock = WRITEATCLOCK;

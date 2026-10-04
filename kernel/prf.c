@@ -124,8 +124,10 @@ void put_console(int c)
 
 #if defined(DEBUG_NEED_PRINTF) || defined(FORSYS) || defined(_INIT) || defined(TEST)
 
-#if defined(DEBUG_NEED_PRINTF) && !defined(_INIT) && !defined(FORSYS)
-/* need to use FAR pointers for resident DEBUG printf()s where SS != DS */
+#if (defined(DEBUG_NEED_PRINTF) && !defined(_INIT) && !defined(FORSYS)) || \
+    (defined(PC88VA) && defined(_INIT))
+/* Resident DEBUG and the VA INIT stack can have SS != DS. Keep stack
+   argument and temporary-buffer pointers qualified across that boundary. */
 #define SSFAR FAR
 #else
 #define SSFAR
@@ -204,7 +206,8 @@ int VA_CDECL printf(CONST char *fmt, ...)
   return 0;
 }
 
-#if defined(DEBUG_NEED_PRINTF) && !defined(_INIT) && !defined(FORSYS)
+#if (defined(DEBUG_NEED_PRINTF) && !defined(_INIT) && !defined(FORSYS)) || \
+    (defined(PC88VA) && defined(_INIT))
 STATIC int VA_CDECL fsprintf(char FAR * buff, CONST char * fmt, ...)
 {
   va_list arg;

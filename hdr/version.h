@@ -44,8 +44,12 @@
 #define KERNEL_VERSION "- GIT "
 #endif
 
+/* M01 may provide a stable UTC build date; retain __DATE__ by default. */
+#ifndef KERNEL_BUILD_DATE
+#define KERNEL_BUILD_DATE __DATE__
+#endif
+
 /* actual version string */
-#define KVS(v,s,o) "FreeDOS kernel " v "(build 20" #s " OEM:" #o ") [compiled " __DATE__ "]\n"
+#define KVS(v,s,o) "FreeDOS kernel " v "(build 20" #s " OEM:" #o ") [compiled " KERNEL_BUILD_DATE "]\n"
 #define xKVS(v,s,o) KVS(v,s,o)
 #define KERNEL_VERSION_STRING xKVS(KERNEL_VERSION, REVISION_SEQ, OEM_ID)
-

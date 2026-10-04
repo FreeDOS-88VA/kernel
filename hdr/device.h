@@ -117,10 +117,40 @@ struct dhdr {
   struct dhdr
   FAR *dh_next;
   UWORD dh_attr;
-    VOID(*dh_strategy) (void);
-    VOID(*dh_interrupt) (void);
+  /* Device headers store entry offsets, not far pointers.  Under the
+   * medium model an unqualified function pointer is four bytes and shifts
+   * dh_name away from the 18-byte assembly layout. */
+#if defined(NEAR) && !defined(__GNUC__)
+#define DHDR_NEAR NEAR
+#else
+/* GCC-family builds may define NEAR as the unsupported token "near";
+ * retain their existing pointer model outside the Watcom contract. */
+#define DHDR_NEAR
+#endif
+  VOID (DHDR_NEAR *dh_strategy) (void);
+  VOID (DHDR_NEAR *dh_interrupt) (void);
+#undef DHDR_NEAR
   UBYTE dh_name[8];
 };
+
+/* The PC-88VA assembly device headers use 16-bit entry offsets.  Keep a
+ * compile-time contract for the medium-model C view so a far function
+ * pointer cannot silently shift dh_name. */
+#if defined(PC88VA) && !defined(PC88VA_DHDR_LAYOUT_CHECKED)
+#define PC88VA_DHDR_LAYOUT_CHECKED
+typedef char pc88va_dhdr_next_width
+  [(sizeof(((struct dhdr *)0)->dh_next) == 4) ? 1 : -1];
+typedef char pc88va_dhdr_attr_width
+  [(sizeof(((struct dhdr *)0)->dh_attr) == 2) ? 1 : -1];
+typedef char pc88va_dhdr_strategy_width
+  [(sizeof(((struct dhdr *)0)->dh_strategy) == 2) ? 1 : -1];
+typedef char pc88va_dhdr_interrupt_width
+  [(sizeof(((struct dhdr *)0)->dh_interrupt) == 2) ? 1 : -1];
+typedef char pc88va_dhdr_name_offset
+  [((unsigned)(void *)&(((struct dhdr *)0)->dh_name) == 10) ? 1 : -1];
+typedef char pc88va_dhdr_total_size
+  [(sizeof(struct dhdr) == 18) ? 1 : -1];
+#endif
 
 #define ATTR_SUBST      0x8000
 #define ATTR_CHAR       0x8000
@@ -503,4 +533,3 @@ WORD ASMPASCAL execrh(request FAR *, struct dhdr FAR *);
 /*
  *      end of device.h
  */
-

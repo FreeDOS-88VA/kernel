@@ -31,6 +31,10 @@
 #include "init-mod.h"
 #include "dyndata.h"
 #include "debug.h"
+#if defined(PC88VA)
+#include "../pc88va/kernel/m13_layout.h"
+#include "../pc88va/build/pc88va_build_id.h"
+#endif
 
 #ifdef VERSION_STRINGS
 static BYTE *mainRcsId =
@@ -51,12 +55,49 @@ STATIC VOID InitIO(void);
 STATIC VOID update_dcb(struct dhdr FAR *);
 STATIC VOID init_kernel(VOID);
 STATIC VOID signon(VOID);
+#if defined(PC88VA)
+extern VOID ASMCFUNC pc88va_print_model(void);
+#endif
 STATIC VOID kernel(VOID);
 STATIC VOID FsConfig(VOID);
 STATIC VOID InitPrinters(VOID);
 STATIC VOID InitSerialPorts(VOID);
 STATIC void CheckContinueBootFromHarddisk(void);
 STATIC void setup_int_vectors(void);
+#if defined(PC88VA)
+#if defined(M13_VISIBLE_DIAGNOSTICS)
+#include "../pc88va/kernel/m13_diag.h"
+#endif
+extern VOID FAR reloc_call_int21_handler(void);
+#if defined(PC88VA)
+extern VOID FAR reloc_call_cpm_entry(void);
+#endif
+extern VOID FAR reloc_call_blk_driver(void);
+extern VOID FAR reloc_call_clk_driver(void);
+extern unsigned short pc88va_console_putc(unsigned short character);
+extern unsigned short pc88va_m13_stage_probe(void);
+extern unsigned short pc88va_m13_after_initio_probe(void);
+extern unsigned short pc88va_m13_after_setup_probe(void);
+extern unsigned short pc88va_m13_after_psp_probe(void);
+extern unsigned short pc88va_m13_after_clock_probe(void);
+extern unsigned short pc88va_m13_after_pspset_probe(void);
+extern unsigned short pc88va_m13_after_dta_probe(void);
+extern unsigned short pc88va_m13_after_pspinit_probe(void);
+extern unsigned short pc88va_m13_after_dta_irqptr_probe(void);
+extern unsigned short pc88va_m13_after_pspinit_irqptr_probe(void);
+extern unsigned short pc88va_m13_after_dsk_probe(void);
+extern unsigned short pc88va_m13_int21_vector_probe(void);
+extern unsigned short pc88va_m13_before_dta_vector_probe(void);
+extern unsigned short pc88va_m13_before_initio_vector_probe(void);
+extern unsigned short pc88va_m13_after_initio_vector_probe(void);
+extern unsigned short pc88va_m13_after_setup_vector_probe(void);
+extern unsigned short pc88va_m13_after_pspset_vector_probe(void);
+extern unsigned short pc88va_m13_initio_enter_probe(void);
+extern unsigned short pc88va_m13_init_device_enter_probe(void);
+extern unsigned short pc88va_m13_init_device_pre_execrh_probe(void);
+extern unsigned short pc88va_m13_init_device_post_execrh_probe(void);
+extern unsigned short pc88va_m13_init_device_next_probe(void);
+#endif
 
 #ifdef _MSC_VER
 BYTE _acrtused = 0;
@@ -80,9 +121,26 @@ VOID ASMCFUNC FreeDOSmain(void)
   DosDataSeg = (__segment) & DATASTART;
   DosTextSeg = (__segment) & prn_dev;
 #endif
+#if defined(PC88VA)
 
   /* clear the Init BSS area (what normally the RTL does */
-  memset(_ib_start, 0, _ib_end - _ib_start);
+  /* PC-88VA's resident link places no initialization BSS in this image.
+     Keep the common clear for non-empty builds, but avoid entering the
+     model-specific RTL helper for the empty range. */
+  /* The PC-88VA large-model runtime emits a broken hidden __PTC far-pointer
+     comparison (it leaves an extra word on the stack before its retf).  The
+     linker keeps the init-BSS symbols in one segment, so compare their
+     offsets and retain the normal clear without entering that helper. */
+#if defined(PC88VA)
+  if (FP_OFF(_ib_start) != FP_OFF(_ib_end))
+#else
+  if (_ib_start != _ib_end)
+#endif
+#else
+
+  /* clear the Init BSS area (what normally the RTL does */
+#endif
+    memset(_ib_start, 0, _ib_end - _ib_start);
 
                         /*  if the kernel has been UPX'ed,
                                 CONFIG info is stored at 50:e2 ..fc
@@ -91,6 +149,23 @@ VOID ASMCFUNC FreeDOSmain(void)
                         */
 
   drv = LoL->BootDrive + 1;
+#if defined(PC88VA)
+  /* The PC-88VA loader carries the boot drive in the resident handoff.  The
+     IBM-PC UPX scratch/BDA location is not part of this platform contract. */
+  drv = 1;
+  /* The common library's far-copy entry is linked with the large-model
+     stack/DGROUP convention.  The M13 medium-model build keeps DOS data in
+     DS, so that entry would interpret the caller's frame in the wrong order
+     and never return.  Copy the small fixed configuration directly while
+     retaining the declared far source at physical 0000:0002. */
+  {
+    BYTE FAR *source = (BYTE FAR *)MK_FP(0, 2);
+    BYTE *destination = (BYTE *)&InitKernelConfig;
+    unsigned int index;
+    for (index = 0; index < sizeof(InitKernelConfig); ++index)
+      destination[index] = source[index];
+  }
+#else
   p = MK_FP(0, 0x5e0);
   if (fmemcmp(p+2,"CONFIG",6) == 0)      /* UPX */
   {
@@ -107,12 +182,15 @@ VOID ASMCFUNC FreeDOSmain(void)
 
   if (drv >= 0x80)
     drv = 3; /* C: */
+#endif
   LoL->BootDrive = drv;
 
   /* install DOS API and other interrupt service routines, basic kernel functionality works */
   setup_int_vectors();
 
+#if !defined(PC88VA)
   CheckContinueBootFromHarddisk();
+#endif
 
   /* display copyright info and kernel emulation status */
   signon();
@@ -236,12 +314,33 @@ void setvec(unsigned char intno, intvec vector)
 
 STATIC void setup_int_vectors(void)
 {
+#if defined(PC88VA)
+  extern unsigned char pc88va_vectors_atomic;
+#endif
   static struct vec
   {
     unsigned char intno;
     size_t handleroff;
   } vectors[] =
     {
+#if defined(PC88VA)
+      /* all of these are in the DOS DS */
+      { 0x0, 0 },   /* zero divide */
+      { 0x1, 0 },   /* single step */
+      { 0x3, 0 },   /* debug breakpoint */
+      { 0x6, 0 },   /* invalid opcode */
+      { 0x19, 0 },
+      { 0x20, 0 },
+      { 0x21, 0 },
+      { 0x22, 0 },
+      { 0x24, 0 },
+      { 0x25, 0 },
+      { 0x26, 0 },
+      { 0x27, 0 },
+      { 0x28, 0 },
+      { 0x2a, 0 },
+      { 0x2f, 0 }
+#else
       /* all of these are in the DOS DS */
       { 0x0, FP_OFF(int0_handler) },   /* zero divide */
       { 0x1, FP_OFF(empty_handler) },  /* single step */
@@ -258,11 +357,40 @@ STATIC void setup_int_vectors(void)
       { 0x28, FP_OFF(int28_handler) },
       { 0x2a, FP_OFF(int2a_handler) },
       { 0x2f, FP_OFF(int2f_handler) }
+#endif
     };
   struct vec *pvec;
   struct lowvec FAR *plvec;
   int i;
+#if defined(PC88VA)
 
+  /* Compact-model function pointers are far and cannot be constant
+     initializers for the 16-bit offset table.  Resolve their offsets after
+     startup while retaining the common vector installation loop. */
+  vectors[0].handleroff = FP_OFF(int0_handler);
+  vectors[1].handleroff = FP_OFF(empty_handler);
+  vectors[2].handleroff = FP_OFF(empty_handler);
+  vectors[3].handleroff = FP_OFF(int6_handler);
+  vectors[4].handleroff = FP_OFF(int19_handler);
+  vectors[5].handleroff = FP_OFF(int20_handler);
+  vectors[6].handleroff = FP_OFF(int21_handler);
+  vectors[7].handleroff = FP_OFF(int22_handler);
+  vectors[8].handleroff = FP_OFF(int24_handler);
+  vectors[9].handleroff = FP_OFF(low_int25_handler);
+  vectors[10].handleroff = FP_OFF(low_int26_handler);
+  vectors[11].handleroff = FP_OFF(int27_handler);
+  vectors[12].handleroff = FP_OFF(int28_handler);
+  vectors[13].handleroff = FP_OFF(int2a_handler);
+  vectors[14].handleroff = FP_OFF(int2f_handler);
+
+#if defined(PC88VA)
+  pc88va_vectors_atomic = 1;
+  disable();
+#endif
+
+#else
+
+#endif
   for (plvec = intvec_table; plvec < intvec_table + 5; plvec++)
     plvec->isv = getvec(plvec->intno);
   for (i = 0x23; i <= 0x3f; i++)
@@ -270,16 +398,73 @@ STATIC void setup_int_vectors(void)
   HaltCpuWhileIdle = 0;
   for (pvec = vectors; pvec < vectors + (sizeof vectors/sizeof *pvec); pvec++)
     setvec(pvec->intno, (intvec)MK_FP(FP_SEG(empty_handler), pvec->handleroff));
+  /* Keep the far-jump opcode in the IVT; its relocated target is filled in
+     after the resident entry is known below. */
   pokeb(0, 0x30 * 4, 0xea);
+#if !defined(PC88VA)
   pokel(0, 0x30 * 4 + 1, (ULONG)cpm_entry);
+#endif
 
   /* these two are in the device driver area LOWTEXT (0x70) */
   setvec(0x1b, got_cbreak);
   setvec(0x29, int29_handler);  /* required for printf! */
+#if defined(PC88VA)
+  pc88va_vectors_atomic = 0;
+  enable();
+#endif
 }
 
 STATIC void init_kernel(void)
 {
+#if defined(PC88VA)
+  COUNT i;
+
+  LoL->os_setver_major = LoL->os_major = MAJOR_RELEASE;
+  LoL->os_setver_minor = LoL->os_minor = MINOR_RELEASE;
+
+  /* Init oem hook - returns memory size in KB    */
+  ram_top = init_oem();
+#if defined(PC88VA)
+  printf("Conventional Memory = %uKB\n", ram_top);
+  printf("Kernel loaded = %05lxh (PC88VA_LOADSEG=%04xh)\n",
+         (ULONG)pc88va_image_segment() << 4, pc88va_image_segment());
+  printf("Kernel file staging = %05lxh\n", (ULONG)m16_boot_layout.file_segment << 4);
+  printf("Carrier = %05lxh\n", (ULONG)m16_boot_layout.carrier_segment << 4);
+  printf("Resident asm = %05lxh\n", (ULONG)m13_layout.resident_text_segment << 4);
+  printf("INIT = %05lxh, %u bytes\n",
+         (ULONG)m13_layout.init_segment << 4, m13_layout.init_bytes);
+  printf("INIT stack = %05lxh-%05lxh\n",
+         (ULONG)m13_layout.init_stack_segment << 4,
+         ((ULONG)m13_layout.init_stack_segment << 4) + m13_layout.init_stack_bytes);
+  printf("Scratch = %05lxh, ring = %05lxh\n",
+         (ULONG)m16_boot_layout.scratch_segment << 4,
+         (ULONG)m16_boot_layout.ring_segment << 4);
+  printf("Bridge stack top = %05lxh\n",
+         ((ULONG)m16_boot_layout.bridge_stack_segment << 4) +
+         m16_boot_layout.bridge_stack_pointer);
+#endif
+
+  /* move kernel to high conventional RAM, just below the init code */
+#if defined(PC88VA)
+  /* Keep the final assembly text after the low resident prefix. INIT code
+     and its stack are separately placed; the old text bounds NEAR Dyn. */
+  if (ram_top < 256 || ram_top > 640 ||
+      m13_layout.version != 1 ||
+      ((ULONG)m13_layout.init_segment << 4) + m13_layout.init_bytes >
+        (ULONG)ram_top * 1024UL ||
+      ((ULONG)m13_layout.init_stack_segment << 4) + m13_layout.init_stack_bytes >
+        (ULONG)ram_top * 1024UL ||
+      (m13_layout.memory_top_segment != PC88VA_LAYOUT_RUNTIME_MEMORY_TOP &&
+       m13_layout.memory_top_segment != (ULONG)ram_top * 64UL))
+    init_fatal("PC88VA placement descriptor");
+  lpTop = MK_FP(m13_layout.resident_text_segment, 0);
+#elif defined(__WATCOMC__)
+  lpTop = MK_FP(_CS, 0);
+#else
+  lpTop = MK_FP(_CS - (FP_OFF(_HMATextEnd) + 15) / 16, 0);
+#endif
+
+#else
   COUNT i;
 
   LoL->os_setver_major = LoL->os_major = MAJOR_RELEASE;
@@ -295,19 +480,92 @@ STATIC void init_kernel(void)
   lpTop = MK_FP(_CS - (FP_OFF(_HMATextEnd) + 15) / 16, 0);
 #endif
 
+#endif
   MoveKernel(FP_SEG(lpTop));
+#if defined(PC88VA)
+  /* The low-entry clock/block thunks are outside the HMA relocation table.
+     Their targets are resident C handlers.  Retain the explicit binding here
+     without changing the separately relocated HMA interrupt entries. */
+  {
+    *((unsigned FAR *)MK_FP(FP_SEG(reloc_call_blk_driver),
+                            FP_OFF(reloc_call_blk_driver) + 3)) = FP_SEG(blk_driver);
+    *((unsigned FAR *)MK_FP(FP_SEG(reloc_call_clk_driver),
+                            FP_OFF(reloc_call_clk_driver) + 3)) = FP_SEG(clk_driver);
+  }
+  /* MoveKernel relocates the HMA text, including the common INT 21 entry.
+     The initial vector table was installed before that move, so refresh this
+     vector to the now-resident entry before the first init-time call. */
+  setvec(0x21, (intvec)MK_FP(CurrentKernelSegment,
+                             FP_OFF(reloc_call_int21_handler)));
+#if defined(PC88VA)
+  /* M13 relocates the VA resident entry away from the low bootstrap thunk. */
+  pokel(0, 0x30 * 4 + 1,
+        (ULONG)MK_FP(CurrentKernelSegment, FP_OFF(reloc_call_cpm_entry)));
+#endif
+#if defined(PC88VA)
+  /* Private diagnostic: capture the actual IVT 21h words after refresh. */
+  (void)pc88va_m13_int21_vector_probe();
+#endif
+#endif
+#if defined(PC88VA)
+  /* Early buffers grow down below the high INIT code and stack. PreConfig2
+     reserves the complete temporary envelope until the resident barrier. */
+  lpTop = MK_FP(m13_layout.init_segment, 0);
+#else
   lpTop = MK_FP(FP_SEG(lpTop) - 0xfff, 0xfff0);
+#endif
 
   /* Initialize IO subsystem                                      */
+#if defined(PC88VA)
+  /* Private stage probe: first Text BIOS call immediately before InitIO. */
+  (void)pc88va_m13_stage_probe();
+  (void)pc88va_m13_before_initio_vector_probe();
+#endif
   InitIO();
+#if defined(PC88VA)
+  /* Sample IVT before the first post-InitIO Text BIOS call.  If InitIO
+     corrupted the vector, the call itself may not return far enough for a
+     later sample. */
+  (void)pc88va_m13_after_initio_vector_probe();
+  /* Private stage probe: first Text BIOS call immediately after InitIO. */
+  (void)pc88va_m13_after_initio_probe();
+#endif
   InitPrinters();
   InitSerialPorts();
+#if defined(PC88VA)
+  /* Private stage probe: after printer/serial setup. */
+  (void)pc88va_m13_after_setup_probe();
+  (void)pc88va_m13_after_setup_vector_probe();
+#endif
 
   init_PSPSet(DOS_PSP);
+ #if defined(PC88VA)
+  /* Private stage probe: after PSP segment selection. */
+  (void)pc88va_m13_after_pspset_probe();
+  /* Private diagnostic: sample IVT 21h immediately before SET_DTA. */
+  (void)pc88va_m13_before_dta_vector_probe();
+  (void)pc88va_m13_after_pspset_vector_probe();
+ #endif
   set_DTA(MK_FP(DOS_PSP, 0x80));
+ #if defined(PC88VA)
+  /* Private stage probe: after DTA selection. */
+  (void)pc88va_m13_after_dta_probe();
+  /* Private diagnostic: capture the BIOS callback pointer before PSP writes. */
+  (void)pc88va_m13_after_dta_irqptr_probe();
+ #endif
   PSPInit();
+#if defined(PC88VA)
+  /* Private stage probe: after PSP initialization. */
+  (void)pc88va_m13_after_pspinit_probe();
+  /* Private diagnostic: capture the same BIOS callback pointer after PSP writes. */
+  (void)pc88va_m13_after_pspinit_irqptr_probe();
+#endif
 
   Init_clk_driver();
+#if defined(PC88VA)
+  /* Private stage probe: after clock initialization. */
+  (void)pc88va_m13_after_clock_probe();
+#endif
 
   /* Do first initialization of system variable buffers so that   */
   /* we can read config.sys later.  */
@@ -317,7 +575,14 @@ STATIC void init_kernel(void)
 
   /*  init_device((struct dhdr FAR *)&blk_dev, NULL, 0, &ram_top); */
   blk_dev.dh_name[0] = dsk_init();
+#if defined(PC88VA)
+  /* Private stage probe: return from dsk_init. */
+  (void)pc88va_m13_after_dsk_probe();
+#endif
 
+ #if defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_PRECONFIG_BEGIN);
+ #endif
   PreConfig();
 
   /* Number of units */
@@ -333,6 +598,9 @@ STATIC void init_kernel(void)
 
   /* initialize near data and MCBs */
   PreConfig2();
+ #if defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_ARENA_CHECK_OK);
+ #endif
   /* and process CONFIG.SYS one last time for device drivers */
   DoConfig(2);
 
@@ -342,7 +610,13 @@ STATIC void init_kernel(void)
     close(i);
 
   /* and do final buffer allocation. */
+ #if defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_POSTCONFIG_BEGIN);
+ #endif
   PostConfig();
+ #if defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_stage(M13_DIAG_POSTCONFIG_DONE);
+ #endif
 
   /* Init the file system one more time     */
   FsConfig();
@@ -413,6 +687,13 @@ STATIC VOID FsConfig(VOID)
 
 STATIC VOID signon()
 {
+#if defined(PC88VA)
+  /* Keep the build ID in the format string itself: init printf's %s reads a
+     near pointer through DS, while the compiler may place this literal in a
+     different segment. Adjacent C literals are concatenated at compile time. */
+  printf("\rPC88VA kernel\nbuild: " PC88VA_BUILD_ID "\n");
+  pc88va_print_model();
+#else
   printf("\r%S"
          "Kernel compatibility %d.%d - "
 #if defined(__BORLANDC__)
@@ -441,16 +722,33 @@ STATIC VOID signon()
   "\n\n%s",
          MK_FP(FP_SEG(LoL), FP_OFF(LoL->os_release)),
          MAJOR_RELEASE, MINOR_RELEASE, copyright);
+#endif
 }
 
 STATIC void kernel()
 {
+#if defined(PC88VA)
+  INIT_LOCAL CommandTail Cmd;
+
+#else
   CommandTail Cmd;
 
+#endif
   if (master_env[0] == '\0')   /* some shells panic on empty master env. */
     strcpy(master_env, "PATH=.");
   fmemcpy(MK_FP(DOS_PSP + 8, 0), master_env, sizeof(master_env));
 
+#if defined(PC88VA)
+  /* PSPInit advertises DOS_PSP + 8 as the process environment paragraph.
+     Keep that advertised environment in sync with the completed master
+     environment before process 0 is handed to COMMAND.COM.  The child
+     loader copies its argv[0] string from this paragraph; leaving the PSP
+     area at its cleared/boot residue makes the argv[0] resource lookup use
+     an unrelated byte sequence even though master_env is valid. */
+  fmemcpy(MK_FP(DOS_PSP + 8, 0), master_env, sizeof(master_env));
+#endif
+
+  /* VA keeps this NEAR command-tail workspace in DGROUP (SS != DS). */
   /* process 0       */
   /* Execute command.com from the drive we just booted from    */
   memset(Cmd.ctBuffer, 0, sizeof(Cmd.ctBuffer));
@@ -493,6 +791,10 @@ STATIC void kernel()
       Config.cfgInitTail = Cmd.ctBuffer;
     }
   }
+
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  pc88va_m13_diag_config_mode(Config.cfgP_0_startmode);
+#endif
   init_call_p_0(&Config); /* go execute process 0 (the shell) */
 }
 
@@ -535,11 +837,25 @@ STATIC VOID update_dcb(struct dhdr FAR * dhp)
 /* If cmdLine is NULL, this is an internal driver */
 
 BOOL init_device(struct dhdr FAR * dhp, char *cmdLine, COUNT mode,
+#if defined(PC88VA)
+                 char FAR * INITPTR *r_top)
+#else
                  char FAR **r_top)
+#endif
 {
   request rq;
+#if defined(PC88VA)
+  INIT_LOCAL char name[8];
+
+#if defined(PC88VA)
+  /* Private bounded probes bracket the first real InitIO request. */
+  (void)pc88va_m13_init_device_enter_probe();
+#endif
+
+#else
   char name[8];
 
+#endif
   if (cmdLine) {
     char *p, *q, ch;
     int i;
@@ -567,11 +883,23 @@ BOOL init_device(struct dhdr FAR * dhp, char *cmdLine, COUNT mode,
   rq.r_status = 0;
   rq.r_command = C_INIT;
   rq.r_length = sizeof(request);
+#if defined(PC88VA)
+  /* Internal C_INIT drivers may not write the initialization union.  The
+     caller tests r_nunits after EXECRH, so make the field deterministic
+     rather than interpreting stack residue as a device count. */
+  rq.r_nunits = 0;
+#endif
   rq.r_endaddr = *r_top;
   rq.r_bpbptr = (void FAR *)(cmdLine ? cmdLine : "\n");
   rq.r_firstunit = LoL->nblkdev;
 
+#if defined(PC88VA)
+  (void)pc88va_m13_init_device_pre_execrh_probe();
+#endif
   execrh((request FAR *) & rq, dhp);
+#if defined(PC88VA)
+  (void)pc88va_m13_init_device_post_execrh_probe();
+#endif
 
 /*
  *  Added needed Error handle
@@ -633,11 +961,85 @@ STATIC void InitIO(void)
 {
   struct dhdr far *device = &LoL->nul_dev;
 
+#if defined(PC88VA)
+  (void)pc88va_m13_initio_enter_probe();
+#endif
+
   /* Initialize driver chain                                      */
   do {
     init_device(device, NULL, 0, &lpTop);
+#if defined(PC88VA)
+    /* Sample the INT 21h vector after each real device request.  This
+       brackets any device-side write without changing the request ABI. */
+    (void)pc88va_m13_after_initio_vector_probe();
+#endif
     device = device->dh_next;
+#if defined(PC88VA)
+    (void)pc88va_m13_init_device_next_probe();
+#endif
   }
+#if defined(PC88VA)
+  while (FP_OFF(device) != 0xffff);
+}
+
+/* issue an internal error message                              */
+#if !defined(PC88VA)
+VOID init_fatal(BYTE * err_msg)
+{
+  printf("\nInternal kernel error - %s\nSystem halted\n", err_msg);
+  for (;;) ;
+}
+#endif
+
+/*
+       Initialize all printers
+ 
+       this should work. IMHO, this might also be done on first use
+       of printer, as I never liked the noise by a resetting printer, and
+       I usually much more often reset my system, then I print :-)
+ */
+
+STATIC VOID InitPrinters(VOID)
+{
+#if defined(PC88VA)
+  return;
+#else
+  INIT_LOCAL iregs r;
+  int num_printers, i;
+
+  init_call_intr(0x11, &r);     /* get equipment list */
+
+  num_printers = (r.a.x >> 14) & 3;     /* bits 15-14 */
+
+  for (i = 0; i < num_printers; i++)
+  {
+    r.a.x = 0x0100;             /* initialize printer */
+    r.d.x = i;
+    init_call_intr(0x17, &r);
+  }
+#endif
+}
+
+STATIC VOID InitSerialPorts(VOID)
+{
+#if defined(PC88VA)
+  return;
+#else
+  INIT_LOCAL iregs r;
+  int serial_ports, i;
+
+  init_call_intr(0x11, &r);     /* get equipment list */
+
+  serial_ports = (r.a.x >> 9) & 7;      /* bits 11-9 */
+
+  for (i = 0; i < serial_ports; i++)
+  {
+    r.a.x = 0xA3;               /* initialize serial port to 2400,n,8,1 */
+    r.d.x = i;
+    init_call_intr(0x14, &r);
+  }
+#endif
+#else
   while (FP_OFF(device) != 0xffff);
 }
 
@@ -688,6 +1090,7 @@ STATIC VOID InitSerialPorts(VOID)
     r.d.x = i;
     init_call_intr(0x14, &r);
   }
+#endif
 }
 
 /*****************************************************************
@@ -703,7 +1106,11 @@ STATIC VOID InitSerialPorts(VOID)
 
 STATIC int EmulatedDriveStatus(int drive,char statusOnly)
 {
+#if defined(PC88VA)
+  INIT_LOCAL iregs r;
+#else
   iregs r;
+#endif
   char buffer[0x13];
   buffer[0] = 0x13;
 
@@ -721,8 +1128,15 @@ STATIC int EmulatedDriveStatus(int drive,char statusOnly)
 
 STATIC void CheckContinueBootFromHarddisk(void)
 {
+#if defined(PC88VA)
+  return;
+#else
   char *bootedFrom = "Floppy/CD";
+#if defined(PC88VA)
+  INIT_LOCAL iregs r;
+#else
   iregs r;
+#endif
   int key;
 
   if (InitKernelConfig.BootHarddiskSeconds == 0)
@@ -787,3 +1201,7 @@ STATIC void CheckContinueBootFromHarddisk(void)
 #endif
   }
 }
+#endif
+#if defined(PC88VA)
+}
+#endif

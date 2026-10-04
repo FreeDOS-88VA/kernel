@@ -55,7 +55,14 @@ _reloc_call_CharMapSrvc:
                 push    ax          ; arg of _upChar
                 mov     ds,[cs:_DGROUP_]
 
+%ifdef PC88VA
+                ; The VA medium-model C body is outside the copied assembly
+                ; segment and returns with RETF. A NEAR call here jumps to a
+                ; relocated garbage offset once the resident copy is used.
+                call    far _DosUpChar
+%else
                 call    _DosUpChar
+%endif
                 ;add     sp, byte 2	// next POP retrieves orig AX
 
                 pop bx

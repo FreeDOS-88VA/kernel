@@ -52,17 +52,27 @@ segment	HMA_TEXT
                 push    ds              ; sp=bp-8
 
 arg {rhp,4}, {dhp,4}
-                lds     si,[.dhp]       ; ds:si = device header
-                les     bx,[.rhp]       ; es:bx = request header
+; Open Watcom emits a far call for this entry in the split M13 text groups;
+; account for the return IP:CS before the Pascal far arguments.  The
+; historical offsets remain for non-Watcom targets.
+%ifdef PC88VA
+%define EXECRH_DHP bp+6
+%define EXECRH_RHP bp+10
+%else
+%define EXECRH_DHP .dhp
+%define EXECRH_RHP .rhp
+%endif
+                lds     si,[EXECRH_DHP]       ; ds:si = device header
+                les     bx,[EXECRH_RHP]       ; es:bx = request header
 
 
                 mov     ax, [si+6]      ; construct strategy address
-                mov     [.dhp], ax
+                mov     [EXECRH_DHP], ax
 
                 push si                 ; the bloody fucking RTSND.DOS 
                 push di                 ; driver destroys SI,DI (tom 14.2.03)
 
-                call    far[.dhp]       ; call far the strategy
+                call    far[EXECRH_DHP]       ; call far the strategy
 
                 pop di 
                 pop si
@@ -70,8 +80,29 @@ arg {rhp,4}, {dhp,4}
                 ; Protect386Registers	; old free-EMM386 versions destroy regs in their INIT method
 
                 mov     ax,[si+8]       ; construct 'interrupt' address
-                mov     [.dhp],ax       ; construct interrupt address
-                call    far[.dhp]       ; call far the interrupt
+                mov     [EXECRH_DHP],ax       ; construct interrupt address
+                call    far[EXECRH_DHP]       ; call far the interrupt
+
+%ifdef PC88VA
+                ; Private return-boundary sample.  Preserve every register
+                ; this helper touches so the real EXECRH epilogue is unchanged.
+                pushf
+                push    ax
+                push    ds
+                push    si
+                push    di
+                xor     ax,ax
+                mov     ds,ax
+                mov     si,[0x84]
+                mov     di,[0x86]
+                global  pc88va_m13_execrh_after_interrupt_capture
+pc88va_m13_execrh_after_interrupt_capture:
+                pop     di
+                pop     si
+                pop     ds
+                pop     ax
+                popf
+%endif
 
                 ; Restore386Registers	; less stack load and better performance...
 
@@ -80,7 +111,13 @@ arg {rhp,4}, {dhp,4}
                 pop     ds
                 pop     si
                 pop     bp
+%ifdef PC88VA
+                ; EXECRH is a far C entry in the split M13 text groups.
+                ; Discard the two far arguments after consuming IP:CS.
+                retf    8
+%else
                 ret     8
+%endif
 %endmacro
 
 EXECRH:

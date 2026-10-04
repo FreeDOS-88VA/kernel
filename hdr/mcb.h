@@ -51,7 +51,18 @@ static BYTE *mcb_hRcsId =
 #define MCB_NORMAL      0x4d
 #define MCB_LAST        0x5a
 
+#if defined(PC88VA)
+/* The PC-88VA firmware/loader contract owns the first 64 KiB during
+   handoff.  DOS may expose the paragraph beginning at 1000h only after the
+   loader has transferred control and the firmware-owned interval is no
+   longer used by the kernel. */
+#define PC88VA_FIRMWARE_END_SEG 0x1000U
+/* Keep the DOS PSP in the reserved low workspace; it remains unavailable to
+   the allocator even after the handoff prefix is released. */
+#define DOS_PSP         0x0200
+#else
 #define DOS_PSP         0x0060  /* 0x0008 What? seg 8 =0:0080 */
+#endif
 #define FREE_PSP        0
 
 #define MCB_SIZE(x)     ((((LONG)(x))<<4)+sizeof(mcb))
@@ -66,4 +77,3 @@ typedef struct {
   BYTE m_fill[3];
   BYTE m_name[8];               /* owner name limited to 8 bytes        */
 } mcb;
-

@@ -180,10 +180,19 @@ _init_stacks:
 		mov	ds,ax
 		mov	es,ax
 
+%ifdef PC88VA
+                ; Medium-model CDECL: FAR return, caller removes arguments.
+                ; BP+6/+8 = stack_base, BP+10 = count, BP+12 = size.
+                mov     bx, [bp+6]
+                mov     dx, [bp+8]
+                mov     ax, [bp+0ah]
+                mov     cx, [bp+0ch]
+%else
                 mov     bx, [bp+4]
                 mov     dx, [bp+6]
                 mov     ax, [bp+8]
                 mov     cx, [bp+0ah]
+%endif
 
                 mov     [stack_size], cx
                 mov     [stack_offs], bx
@@ -213,7 +222,11 @@ _init_stacks:
                 pop     di
                 pop     ds
                 pop     bp
+%ifdef PC88VA
+                retf
+%else
                 ret
+%endif
 
 ; set interrupt vectors:
 ; in: es=LGROUP, ds=0

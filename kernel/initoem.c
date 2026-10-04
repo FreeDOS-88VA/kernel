@@ -38,6 +38,31 @@ static BYTE *RcsId =
 #define EBDASEG 0x40e
 #define RAMSIZE 0x413
 
+#if defined(PC88VA)
+
+/* PC-88VA has no IBM-PC BDA or INT 12h memory-size contract. The resident
+   adapter measures writable conventional RAM above the low-staging envelope
+   and restores each sampled byte before returning the capacity in KiB. */
+extern unsigned FAR ASMPASCAL pc88va_memory_kb(void);
+
+unsigned init_oem(void)
+{
+  return pc88va_memory_kb();
+}
+
+void movebda(size_t bytes, unsigned new_seg)
+{
+  (void)bytes;
+  (void)new_seg;
+}
+
+unsigned ebdasize(void)
+{
+  return 0;
+}
+
+#else
+
 unsigned init_oem(void)
 {
   iregs r;
@@ -71,3 +96,5 @@ unsigned ebdasize(void)
     }
   return 0;
 }
+
+#endif

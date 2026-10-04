@@ -40,6 +40,51 @@ static char *RcsId =
 UWORD ASM DaysSinceEpoch = 0;
 typedef UDWORD ticks_t;
 
+#if defined(PC88VA)
+/* Keep the DOS session clock on the existing native counter. The native
+   calendar initializes DOS at boot; DOS setting need not change that calendar
+   or restrict the DOS year range to the firmware's smaller range. */
+#define PC88VA_DAY_HUNDREDTHS 8640000UL
+STATIC BYTE pc88va_clock_started;
+STATIC ticks_t pc88va_clock_sample;
+STATIC ticks_t pc88va_clock_value;
+
+STATIC ticks_t Pc88vaClockSample(void)
+{
+  ticks_t ticks = 5 * ReadPCClock();
+  return ((ticks / 59659u) << 16) + ((ticks % 59659u) << 16) / 59659u;
+}
+
+STATIC ticks_t Pc88vaClockRead(void)
+{
+  ticks_t sample = Pc88vaClockSample();
+  ticks_t elapsed;
+
+  if (!pc88va_clock_started)
+  {
+    pc88va_clock_started = 1;
+    pc88va_clock_value = sample;
+  }
+  else
+  {
+    /* Unsigned subtraction followed by the day correction also handles
+       wraparound; keep one subtraction on this frequently used path. */
+    elapsed = sample - pc88va_clock_sample;
+    if (sample < pc88va_clock_sample)
+      elapsed += PC88VA_DAY_HUNDREDTHS;
+    pc88va_clock_value += elapsed;
+    if (pc88va_clock_value >= PC88VA_DAY_HUNDREDTHS)
+    {
+      pc88va_clock_value -= PC88VA_DAY_HUNDREDTHS;
+      ++DaysSinceEpoch;
+    }
+  }
+  pc88va_clock_sample = sample;
+  return pc88va_clock_value;
+}
+#endif
+
+#if !defined(PC88VA)
 STATIC int ByteToBcd(int x)
 {
   return ((x / 10) << 4) | (x % 10);
@@ -57,10 +102,13 @@ STATIC void DayToBcd(BYTE * x, unsigned mon, unsigned day, unsigned yr)
   x[3] = ByteToBcd(yr / 100);
   x[2] = ByteToBcd(yr % 100);
 }
+#endif
 
 WORD ASMCFUNC FAR clk_driver(rqptr rp)
 {
+#if !defined(PC88VA)
   BYTE bcd_days[4], bcd_minutes, bcd_hours, bcd_seconds;
+#endif
 
   switch (rp->r_command)
   {
@@ -83,8 +131,12 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
         /* The scaling factor is now
            6553600/1193180 = 327680/59659 = 65536*5/59659 */
 
+#if defined(PC88VA)
+        ticks = Pc88vaClockRead();
+#else
         ticks = 5 * ReadPCClock();
         ticks = ((ticks / 59659u) << 16) + ((ticks % 59659u) << 16) / 59659u;
+#endif
 
         tmp = (int)(ticks / 6000);
         clk.clkHours = tmp / 60;
@@ -101,6 +153,18 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
       return S_DONE;
 
     case C_OUTPUT:
+#if defined(PC88VA)
+      {
+        struct ClockRecord clk;
+        ticks_t hs;
+#if !defined(PC88VA)
+        const unsigned short *pdays;
+        unsigned Day, Month, Year;
+        ticks_t Ticks;
+#endif
+
+        if (sizeof(struct ClockRecord) != rp->r_count)
+#else
       {
         const unsigned short *pdays;
         unsigned Day, Month, Year;
@@ -108,6 +172,7 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
         ticks_t hs, Ticks;
 
         if (sizeof(struct ClockRecord) != rp->r_count)
+#endif
           return failure(E_LENGTH);
 
         fmemcpy(&clk, rp->r_trans, sizeof(struct ClockRecord));
@@ -116,6 +181,13 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
         DaysSinceEpoch = clk.clkDays;
         hs = 6000 * (ticks_t)(60 * clk.clkHours + clk.clkMinutes) +
           (ticks_t)(100 * clk.clkSeconds + clk.clkHundredths);
+
+#if defined(PC88VA)
+        /* Anchor the new DOS value to a fresh sample of the same source. */
+        pc88va_clock_sample = Pc88vaClockSample();
+        pc88va_clock_value = hs;
+        pc88va_clock_started = 1;
+#else
 
         /* The scaling factor is now
            1193180/6553600 = 59659/327680 = 59659/65536/5 */
@@ -155,6 +227,7 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
         bcd_hours = ByteToBcd(clk.clkHours);
         bcd_seconds = ByteToBcd(clk.clkSeconds);
         WriteATClock(bcd_days, bcd_hours, bcd_minutes, bcd_seconds);
+#endif
       }
       return S_DONE;
 
@@ -170,4 +243,3 @@ WORD ASMCFUNC FAR clk_driver(rqptr rp)
       return failure(E_FAILURE);        /* general failure */
   }
 }
-

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Run only in an exported tree with the pinned Open Watcom 1.9 Linux tools.
+all: sysva.exe
+
+pc88va.obj: pc88va.c
+	wcc -zq -0 -ms -bt=dos -os -s -we -e5 -zp1 -fo=$@ pc88va.c
+
+pc88va_io.obj: pc88va_io.asm
+	nasm -f obj -o $@ pc88va_io.asm
+
+sysva.exe: pc88va.obj pc88va_io.obj
+	wlink system dos option quiet,stack=4096,map=sysva.map name $@ file pc88va.obj,pc88va_io.obj
+
+clean: .SYMBOLIC
+	-rm -f pc88va.obj pc88va_io.obj sysva.exe sysva.map

@@ -150,7 +150,13 @@ Int2f?14:      ;; MUX-14 -- NLSFUNC API
                Protect386Registers
                PUSH$ALL
                SwitchToInt2fStack
+%ifdef PC88VA
+               ; The VA medium-model C body is outside the copied assembly
+               ; segment and consumes a FAR return frame.
+               call far _syscall_MUX14
+%else
                call _syscall_MUX14
+%endif
                DoneInt2fStack
                pop bp                  ; Discard incoming AX
                push ax                 ; Correct stack for POP$ALL
@@ -215,7 +221,11 @@ IntDosCal:
 
     SwitchToInt2fStack
     extern   _int2F_12_handler
+%ifdef PC88VA
+    call far _int2F_12_handler
+%else
     call _int2F_12_handler
+%endif
     DoneInt2fStack
 
 %if XCPU >= 386
@@ -243,7 +253,11 @@ IntDosCal:
 SHARE_CHECK:
 		mov	ax, 0x1000
 		int	0x2f
+%ifdef PC88VA
+		retf
+%else
 		ret
+%endif
            
 ;           DOS calls this to see if it's okay to open the file.
 ;           Returns a file_table entry number to use (>= 0) if okay
@@ -260,6 +274,22 @@ SHARE_CHECK:
 ;			     int sharemode) /* SHARE_COMPAT, etc... */
 		global SHARE_OPEN_CHECK
 SHARE_OPEN_CHECK:
+%ifdef PC88VA
+		push	bp
+		mov	bp, sp
+		push	si
+		mov	 es, si
+		mov	si, [ss:bp+12] ; filename (near pointer)
+		mov	bx, [ss:bp+10] ; pspseg
+		mov	cx, [ss:bp+8]  ; openmode
+		mov	dx, [ss:bp+6]  ; sharemode
+		mov	ax, 0x10a0
+		int	0x2f
+		mov	si, es
+		pop	si
+		pop	bp
+		retf	8
+%else
 		mov	es, si		; save si
 		pop	ax		; return address
 		popargs	si,bx,cx,dx	; filename,pspseg,openmode,sharemode;
@@ -268,6 +298,7 @@ SHARE_OPEN_CHECK:
 		int	0x2f	     	; returns ax
 		mov	si, es		; restore si
 		ret
+%endif
 
 ;          DOS calls this to record the fact that it has successfully
 ;          closed a file, or the fact that the open for this file failed.
@@ -275,12 +306,22 @@ SHARE_OPEN_CHECK:
 
 		global	SHARE_CLOSE_FILE
 SHARE_CLOSE_FILE:
+%ifdef PC88VA
+		push	bp
+		mov	bp, sp
+		mov	bx, [ss:bp+6] ; fileno
+		mov	ax, 0x10a1
+		int	0x2f
+		pop	bp
+		retf	2
+%else
 		pop	ax
 		pop	bx
 		push	ax
 		mov	ax, 0x10a1
 		int	0x2f
 		ret
+%endif
 
 ;          DOS calls this to determine whether it can access (read or
 ;          write) a specific section of a file.  We call it internally
@@ -307,18 +348,31 @@ share_common:
 		mov	bp, sp
 		push	si
 		push	di
-arg pspseg, fileno, {ofs,4}, {len,4}, allowcriter
+%ifdef PC88VA
+		mov	bx, [ss:bp+18] ; pspseg
+		mov	cx, [ss:bp+16] ; fileno
+		mov	si, [ss:bp+14] ; ofs high word
+		mov	di, [ss:bp+12] ; ofs low word
+		les	dx, [ss:bp+8]  ; len (ES:DX)
+		or	ax, [ss:bp+6]    ; allowcriter/unlock
+%else
+	arg pspseg, fileno, {ofs,4}, {len,4}, allowcriter
 		mov	bx, [.pspseg] ; pspseg
 		mov	cx, [.fileno] ; fileno
 		mov	si, [.ofs+2] ; high word of ofs
 		mov	di, [.ofs] ; low word of ofs
 		les	dx, [.len] ; len
 		or	ax, [.allowcriter] ; allowcriter/unlock
+%endif
 		int	0x2f
 		pop	di
 		pop	si
 		pop	bp
+	%ifdef PC88VA
+		retf	14
+	%else
 		ret	14		; returns ax
+	%endif
 
 ;          DOS calls this to lock or unlock a specific section of a file.
 ;          Returns zero if successfully locked or unlocked.  Otherwise
@@ -369,14 +423,31 @@ remote_lock_unlock:
 ;long ASMPASCAL network_redirector_mx(unsigned cmd, void far *s, void *arg)
                 global NETWORK_REDIRECTOR_MX
 NETWORK_REDIRECTOR_MX:
+%ifdef PC88VA
+                ; The medium-model callers use a FAR Pascal call.  Keep
+                ; the return frame intact while reading the four-word
+                ; argument area (cmd, far s, near arg).
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                mov     ax, [ss:bp+12] ; cmd
+                mov     dx, [ss:bp+8]  ; s offset
+                mov     es, [ss:bp+10] ; s segment
+                mov     cx, [ss:bp+6]  ; arg
+                jmp     short call_int2f
+%else
                 pop     bx             ; ret address
                 popargs ax,{es,dx},cx  ; cmd (ax), seg:off s
                                        ; stack value (arg); cx in remote_rw
                 push    bx             ; ret address
+%endif
 call_int2f:
+%ifndef PC88VA
                 push    bp
                 push    si
                 push    di
+%endif
                 cmp     al, 0fh
                 je      remote_getfattr
 
@@ -413,7 +484,11 @@ ret_int2f:
                 pop     di
                 pop     si
                 pop     bp
+%ifdef PC88VA
+                retf    8
+%else
                 ret
+%endif
 
 ret_set_ax_to_cx:                      ; ext_open or rw -> status from CX in AX
                                        ; otherwise CX was set to zero above
@@ -479,6 +554,28 @@ int2f_restore_ds:
 		extern _nlsInfo
 		global CALL_NLS
 CALL_NLS:
+%ifdef PC88VA
+                ; Medium-model Pascal: FAR return, followed by seven words
+                ; of arguments in reverse declaration order.
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                mov     cx, [ss:bp+6]   ; buffer length
+                mov     dx, [ss:bp+8]   ; country
+                mov     bx, [ss:bp+10]  ; codepage
+                mov     ax, [ss:bp+12]  ; subfunction
+                mov     ah, 0x14
+                mov     si, _nlsInfo
+                les     di, [ss:bp+14]  ; caller's far buffer
+                mov     bp, [ss:bp+18]  ; multiplex BP argument
+                int     0x2f
+                mov     dx, bx
+                pop     di
+                pop     si
+                pop     bp
+                retf    14
+%else
 		pop	es		; ret addr
 		pop	cx		; bufsize
 		pop	dx		; cntry
@@ -499,9 +596,13 @@ CALL_NLS:
 		pop	si
 		pop	bp
 		ret	6
+%endif
 
 ; extern UWORD ASMPASCAL floppy_change(UWORD drives)
-
+; PC-88VA supplies the bounded read-only adapter implementation.  Keeping
+; this IBM/redirector helper out of that link avoids a duplicate symbol and
+; prevents an accidental host INT 2F probe from becoming a disk service.
+%ifndef PC88VA
 		global FLOPPY_CHANGE
 FLOPPY_CHANGE:
 		pop	cx		; ret addr
@@ -512,6 +613,7 @@ FLOPPY_CHANGE:
 		int	0x2f
 		mov	ax, cx		; return
 		ret
+%endif
 
 ;
 ; Test to see if a umb driver has been loaded.

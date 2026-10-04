@@ -67,7 +67,13 @@ _DosIdle_int:
                 call    Do_DosI
 DosId1:
                 pop     ds
+%ifdef PC88VA
+                ; PC88VA places this routine in HMA_TEXT, so C callers in
+                ; the resident AUTO code enter through a far call.
+                retf
+%else
                 retn
+%endif
 
 Do_DosI:
                 push    ax

@@ -56,10 +56,17 @@ _exec_user:
 ;
 ;
 ;
-                pop     ax		      ; return address (unused)
+                pop     ax		      ; return IP (unused)
 
-                pop     bp		      ; irp (user ss:sp)
-                pop	si
+%ifdef PC88VA
+                ; Open Watcom medium-model callers enter this non-returning
+                ; switch through a FAR CALL.  Consume its CS before the
+                ; far-pointer argument; the non-PC88VA entry remains the
+                ; historical near-call contract.
+                pop     ax		      ; return CS (unused)
+%endif
+                pop     bp		      ; irp offset (user ss:sp)
+                pop	si		      ; irp segment
 		pop	cx		      ; disable A20?
 		or	cx,cx
 		jz	do_iret
@@ -297,4 +304,13 @@ reloc_call_p_0:
         sti
         push dx         ; pass parameter 0 onto the new stack
         push ax
+%ifdef PC88VA
+        ; Resident medium-model C code is not in the moving HMA segment.
+        ; Its CDECL parameter fetch also requires a two-word return frame.
+        call seg _P_0:_P_0
+        ; Never fall through into another resident helper if C returns.
+        extern _pc88va_p0_returned
+        jmp far _pc88va_p0_returned
+%else
         call _P_0       ; no return, allow parameter fetch from C
+%endif

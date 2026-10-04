@@ -28,6 +28,13 @@
 
 #include "portab.h"
 #include "globals.h"
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+#include "../pc88va/kernel/m13_diag.h"
+#endif
+#if defined(PC88VA)
+extern VOID init_fatal(BYTE * err_msg);
+extern COUNT pc88va_release_boot_memory(void);
+#endif
 
 #ifdef VERSION_STRINGS
 static BYTE *RcsId =
@@ -49,7 +56,13 @@ static BYTE *RcsId =
 #define ExeHeader (*(exe_header *)(SecPathName + 0))
 #define TempExeBlock (*(exec_blk *)(SecPathName + sizeof(exe_header)))
 #define Shell (SecPathName + sizeof(exe_header) + sizeof(exec_blk))
+#if defined(PC88VA)
+#define SHELL_CAPACITY (sizeof(SecPathName) - sizeof(exe_header) - sizeof(exec_blk))
+#define SHELL_RETRY_OVERHEAD 4U /* name NUL, tail count/CR/NUL */
 
+#else
+
+#endif
 #ifdef __TURBOC__ /* this is a Borlandism and doesn't work elsewhere */
  #if sizeof(SecPathName) < sizeof(exe_header) + sizeof(exec_blk) + NAMEMAX
   #error No room in SecPathName to be recycled!
@@ -65,12 +78,24 @@ static BYTE *RcsId =
            + 1 byte: '\0'
            -- 1999/04/21 ska */
 
+#if defined(PC88VA)
+/* Keep the initial PC-88VA IVT transaction quiescent until every vector is
+   installed.  The normal DOS vector helpers still restore interrupts for
+   all calls outside that bounded startup window. */
+unsigned char pc88va_vectors_atomic;
+#endif
+
 intvec getvec(unsigned char intno)
 {
   intvec iv;
   disable();
   iv = *(intvec FAR *)MK_FP(0,4 * (intno));
+#if defined(PC88VA)
+  if (!pc88va_vectors_atomic)
+    enable();
+#else
   enable();
+#endif
   return iv;
 }
 
@@ -78,7 +103,12 @@ void setvec(unsigned char intno, intvec vector)
 {
   disable();
   *(intvec FAR *)MK_FP(0,4 * intno) = vector;
+#if defined(PC88VA)
+  if (!pc88va_vectors_atomic)
+    enable();
+#else
   enable();
+#endif
 }
 
 ULONG SftGetFsize(int sft_idx)
@@ -856,30 +886,119 @@ VOID ASMCFUNC P_0(struct config FAR *Config)
 {
   BYTE *tailp, *endp;
   exec_blk exb;
+#if defined(PC88VA)
+  exec_blk FAR *exec_param;
+  extern BYTE *pc88va_boot_error;
+#endif
   UBYTE mode = Config->cfgP_0_startmode;
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+  int exec_rc;
+  unsigned short exec_attempt = 0;
+  unsigned short exec_origin = 1; /* boot-config command */
+#endif
 
   /* build exec block and save all parameters here as init part will vanish! */
   exb.exec.fcb_1 = exb.exec.fcb_2 = (fcb FAR *)-1L;
   exb.exec.env_seg = DOS_PSP + 8;
+ #if defined(PC88VA)
+  /* exb is stack-local.  Build the FAR parameter explicitly from SS and
+   * the compiler-generated local offset; a near-to-far conversion would
+   * incorrectly select DS for the service's ES:BX input. */
+  exec_param = (exec_blk FAR *)MK_FP(_SS, FP_OFF(&exb));
+ #endif
   fstrcpy(Shell, MK_FP(FP_SEG(Config), Config->cfgInit));
   /* join name and tail */
   fstrcpy(Shell + strlen(Shell), MK_FP(FP_SEG(Config), Config->cfgInitTail));
   endp =  Shell + strlen(Shell);
 
+#if defined(PC88VA)
+  /* The recycled buffer must also hold the command-tail bookkeeping that
+   * is appended below.  Reject an oversized initial command before any
+   * shift can write beyond SecPathName. */
+  if (SHELL_CAPACITY <= SHELL_RETRY_OVERHEAD ||
+      (unsigned)(endp - Shell) > SHELL_CAPACITY - SHELL_RETRY_OVERHEAD)
+    init_fatal("Shell command too long");
+  if (pc88va_release_boot_memory() != SUCCESS)
+    init_fatal(pc88va_boot_error ? pc88va_boot_error : "PC88VA boot lifetime");
+#endif
+
   for ( ; ; )   /* endless shell load loop - reboot or shut down to exit it! */
   {
     BYTE *p;
+#if defined(PC88VA)
+    BYTE *content_end;
+
+    /* Read results are not required to contain CR/LF.  Bound the scan by
+     * the returned length and strip any line ending that is present before
+     * constructing the DOS command-tail representation. */
+    content_end = endp;
+    while (content_end > Shell &&
+           (content_end[-1] == '\r' || content_end[-1] == '\n'))
+      --content_end;
+
+    tailp = NULL;
+    for (p = Shell; p < content_end; ++p)
+      if (*p == '\t' || *p == ' ')
+      {
+        tailp = p;
+        break;
+      }
+    if (tailp == NULL)
+      tailp = content_end;
+
+    /* Shift the command tail by two bytes for the terminating NUL and
+     * ctCount.  The synthesized command-tail CR is internal formatting,
+     * not a claim that the input service supplied a line ending. */
+    for (p = content_end; p > tailp; )
+    {
+      --p;
+#else
     /* if there are no parameters, point to end without "\r\n" */
     if((tailp = strchr(Shell,'\t')) == NULL &&
        (tailp = strchr(Shell, ' ')) == NULL)
         tailp = endp - 2;
     /* shift tail to right by 2 to make room for '\0', ctCount */
     for (p = endp - 1; p >= tailp; p--)
+#endif
       *(p + 2) = *p;
+#if defined(PC88VA)
+    }
+    *tailp = '\0';
+#else
     /* terminate name and tail */
     *tailp =  *(endp + 2) = '\0';
     /* ctCount: just past '\0' do not count the "\r\n" */
+#endif
     exb.exec.cmd_line = (CommandTail *)(tailp + 1);
+#if defined(PC88VA)
+    exb.exec.cmd_line->ctCount = content_end - tailp;
+    exb.exec.cmd_line->ctBuffer[content_end - tailp] = '\r';
+    exb.exec.cmd_line->ctBuffer[content_end - tailp + 1] = '\0';
+#ifdef DEBUG
+    printf("Process 0 starting: %s%s\n\n", Shell, tailp + 2);
+#endif
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+    ++exec_attempt;
+    pc88va_m13_diag_shell_exec_begin(mode);
+    pc88va_m13_diag_shell_exec_attempt(
+        exec_attempt, exec_origin, (const unsigned char *)Shell,
+        (unsigned short)(tailp - Shell));
+    pc88va_m13_diag_exec_param_match((unsigned short)
+        (FP_SEG(exec_param) == _SS &&
+         FP_OFF(exec_param) == FP_OFF(&exb)));
+    exec_rc = res_DosExec(mode, exec_param, Shell);
+    pc88va_m13_diag_exec_service_return(pc88va_m13_exec_raw_ax,
+                                        pc88va_m13_exec_raw_flags);
+    pc88va_m13_diag_shell_exec_return(exec_rc);
+ #elif defined(PC88VA)
+    res_DosExec(mode, exec_param, Shell);
+ #else
+    res_DosExec(mode, &exb, Shell);
+ #endif
+    put_string("Bad or missing Command Interpreter: "); /* failure _or_ exit */
+    put_string(Shell);
+    put_string(tailp + 2);
+#else
     exb.exec.cmd_line->ctCount = endp - tailp - 2;
 #ifdef DEBUG
     printf("Process 0 starting: %s%s\n\n", Shell, tailp + 2);
@@ -888,8 +1007,59 @@ VOID ASMCFUNC P_0(struct config FAR *Config)
     put_string("Bad or missing Command Interpreter: "); /* failure _or_ exit */
     put_string(Shell);
     put_string(tailp + 2);
+#endif
     put_string(" Enter the full shell command line: ");
+#if defined(PC88VA)
+ #if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+    pc88va_m13_diag_shell_input_begin();
+ #endif
+    {
+      unsigned short input_rc;
+#if defined(PC88VA)
+      unsigned short shell_capacity = (unsigned short)SHELL_CAPACITY;
+      unsigned short shell_input_limit = 0;
+      unsigned short input_valid;
+      if (shell_capacity > SHELL_RETRY_OVERHEAD)
+        shell_input_limit = (unsigned short)(shell_capacity -
+                                             SHELL_RETRY_OVERHEAD);
+      input_rc = res_read(STDIN, Shell, shell_input_limit);
+      input_valid = (unsigned short)(input_rc != 0xffffU &&
+                                     input_rc <= shell_input_limit);
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+      pc88va_m13_diag_input_service_return(pc88va_m13_input_raw_ax,
+                                           pc88va_m13_input_raw_flags);
+      pc88va_m13_diag_input_wrapper_return(input_rc);
+      if (input_valid)
+        pc88va_m13_diag_input_bytes((const unsigned char *)Shell, input_rc);
+      else
+        pc88va_m13_diag_input_bytes((const unsigned char *)0, 0);
+      pc88va_m13_diag_input_length_valid(input_valid);
+#endif
+      if (!input_valid)
+      {
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+        pc88va_m13_diag_input_rejected();
+#endif
+        /* P_0 is entered through reloc_call_p_0, whose call site is
+         * explicitly non-returning.  Use the existing fatal path instead
+         * of returning into an unsupported continuation. */
+        init_fatal("Shell input failure");
+      }
+      endp = Shell + input_rc;
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+      exec_origin = 2; /* recovery-input command */
+#endif
+#else
+      input_rc = res_read(STDIN, Shell, NAMEMAX);
+      endp = Shell + input_rc;
+#endif
+    }
+#if defined(PC88VA) && defined(M13_VISIBLE_DIAGNOSTICS)
+    pc88va_m13_diag_shell_input_end((unsigned short)(endp - Shell));
+ #endif
+#else
     endp = Shell + res_read(STDIN, Shell, NAMEMAX);
+#endif
     *endp = '\0';                             /* terminate string for strchr */
   }
 }

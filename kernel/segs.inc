@@ -121,3 +121,13 @@ segment	IB_B      	class(IB)  align=2 nobits
 segment	IB      	class(IB)  align=2 nobits
 segment	IB_E      	class(IB)  align=2 nobits
 %endif
+
+%ifdef PC88VA_M13
+; All legacy INIT assembly shares the discardable VA INIT code group.
+; Define the alias after the historical declarations so it never joins TGROUP.
+segment M13_INIT_TEXT class=M13INIT public align=16 use16
+group M13_INIT_GROUP M13_INIT_TEXT
+%undef IGROUP
+%define IGROUP M13_INIT_GROUP
+%define INIT_TEXT M13_INIT_TEXT
+%endif

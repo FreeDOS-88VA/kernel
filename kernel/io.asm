@@ -216,6 +216,10 @@ uUnitNumber	dw	0
 GenStrategy:
                 mov     word [cs:_ReqPktPtr],bx
                 mov     word [cs:_ReqPktPtr+2],es
+%ifdef PC88VA
+                global  pc88va_m13_genstrategy_capture
+pc88va_m13_genstrategy_capture:
+%endif
                 retf
 
 
@@ -520,6 +524,10 @@ clk_entry:
 
                 ; block device interrupt
 blk_entry:
+%ifdef PC88VA
+                global  pc88va_m13_blk_entry_capture
+pc88va_m13_blk_entry_capture:
+%endif
                 pushf
                 push    bx
                 
@@ -540,6 +548,10 @@ clk_and_blk_common:
                 cli                                     ; no interrupts
                 mov     ss,[cs:_TEXT_DGROUP]
                 mov     sp,[cs:bx]
+%ifdef PC88VA
+                global  pc88va_m13_blk_stack_capture
+pc88va_m13_blk_stack_capture:
+%endif
                 
                 push    cx
                 popf                                    ; restore interrupt flag
@@ -558,16 +570,56 @@ clk_and_blk_common:
                 Protect386Registers
 
                 mov     ds,[cs:_TEXT_DGROUP]        ; 
+%ifdef PC88VA
+                global  pc88va_m13_blk_before_driver_capture
+pc88va_m13_blk_before_driver_capture:
+%endif
                 
                 
                 push    word [cs:_ReqPktPtr+2]
                 push    word [cs:_ReqPktPtr]
                 call    far [cs:bx+2]
+%ifdef PC88VA
+                global  pc88va_m13_blk_after_driver_capture
+pc88va_m13_blk_after_driver_capture:
+                push    ax
+                push    ds
+                xor     ax,ax
+                mov     ds,ax
+                mov     si,[0x84]
+                mov     di,[0x86]
+                pop     ds
+                pop     ax
+                global  pc88va_m13_blk_after_driver_vector_capture
+pc88va_m13_blk_after_driver_vector_capture:
+%endif
                 pop     cx
                 pop     cx
                 
                 les     bx,[cs:_ReqPktPtr]		; now return completion code
+%ifdef PC88VA
+                global  pc88va_m13_blk_before_status_capture
+pc88va_m13_blk_before_status_capture:
+%endif
                 mov     word [es:bx+status],ax  ; mark operation complete
+%ifdef PC88VA
+                pushf
+                push    ax
+                push    ds
+                push    si
+                push    di
+                xor     ax,ax
+                mov     ds,ax
+                mov     si,[0x84]
+                mov     di,[0x86]
+                global  pc88va_m13_blk_after_status_vector_capture
+pc88va_m13_blk_after_status_vector_capture:
+                pop     di
+                pop     si
+                pop     ds
+                pop     ax
+                popf
+%endif
                 
                 
                 Restore386Registers

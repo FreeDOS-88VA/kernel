@@ -43,6 +43,10 @@ static BYTE *dskRcsId =
 
 BOOL ASMPASCAL fl_reset(WORD);
 COUNT ASMPASCAL fl_diskchanged(WORD);
+#if defined(PC88VA)
+extern COUNT ASMPASCAL pc88va_m16_probe_read(WORD, WORD, UBYTE FAR *);
+extern COUNT ASMPASCAL pc88va_m16_set_profile(WORD, WORD, WORD, WORD, WORD);
+#endif
 
 COUNT ASMPASCAL fl_format(WORD, WORD, WORD, WORD, WORD, UBYTE FAR *);
 COUNT ASMPASCAL fl_read(WORD, WORD, WORD, WORD, WORD, UBYTE FAR *);
@@ -62,6 +66,10 @@ UWORD ASMPASCAL floppy_change(UWORD);
 #pragma aux (pascal) fl_readkey modify exact [ax]
 #pragma aux (pascal) fl_lba_ReadWrite modify exact [ax dx]
 #pragma aux (pascal) floppy_change modify exact [ax cx dx]
+#if defined(PC88VA)
+#pragma aux (pascal) pc88va_m16_probe_read modify exact [ax]
+#pragma aux (pascal) pc88va_m16_set_profile modify exact [ax]
+#endif
 #endif
 
 STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
@@ -173,8 +181,19 @@ static dsk_proc * const dispatch[NENTRY] =
 COUNT ASMCFUNC FAR blk_driver(rqptr rp)
 {
   if (rp->r_unit >= blk_dev.dh_name[0] && rp->r_command != C_INIT)
+#if defined(PC88VA)
+  {
+    if (rp->r_command == C_INPUT || rp->r_command == C_OUTPUT ||
+        rp->r_command == C_OUTVFY)
+      rp->r_count = 0;
+#endif
     return failure(E_UNIT);
+#if defined(PC88VA)
+  }
+  if (rp->r_command >= NENTRY)
+#else
   if (rp->r_command > NENTRY)
+#endif
   {
     return failure(E_FAILURE);  /* general failure */
   }
@@ -246,6 +265,11 @@ STATIC WORD diskchange(ddt * pddt)
       return M_CHANGED;
     else if (result == 0)
       return M_NOT_CHANGED;
+#if defined(PC88VA)
+    /* An uncertain VA firmware result needs a probe now, even just after I/O.
+       The elapsed-time fallback must not hide a possible replacement. */
+    return M_DONT_KNOW;
+#endif
   }
 
   /* can not detect or error... */
@@ -268,6 +292,7 @@ STATIC WORD mediachk(rqptr rp, ddt * pddt)
   else
   {
     rp->r_mcretcode = diskchange(pddt);
+#if !defined(PC88VA)
     if (rp->r_mcretcode == M_DONT_KNOW)
     {
       /* don't know but can check serial number ... */
@@ -278,7 +303,33 @@ STATIC WORD mediachk(rqptr rp, ddt * pddt)
       if (serialno != pddt->ddt_serialno)
         rp->r_mcretcode = M_CHANGED;
     }
+#endif
   }
+#if defined(PC88VA)
+  if (rp->r_mcretcode == M_DONT_KNOW)
+  {
+    /* Requests are synchronous and getbpb does not call INT24. Keep this
+       snapshot in DGROUP: a driver can also be entered with SS != DS.
+       A matching nonzero DOS volume ID and complete BPB preserve the binding;
+       absent identity stays uncertain, and errors must not become success. */
+    static bpb previous_bpb;
+    ULONG serialno = pddt->ddt_serialno;
+    COUNT result;
+    memcpy(&previous_bpb, &pddt->ddt_bpb, sizeof(bpb));
+    result = getbpb(pddt);
+    if (result != 0)
+      return result;
+    if (serialno != pddt->ddt_serialno ||
+        memcmp(&previous_bpb, &pddt->ddt_bpb, sizeof(bpb)) != 0)
+      rp->r_mcretcode = M_CHANGED;
+    else if (serialno != 0)
+    {
+      rp->r_mcretcode = M_NOT_CHANGED;
+      pddt->ddt_descflags &= ~DF_DISKCHANGE;
+      tmark(pddt);
+    }
+  }
+#endif
   return S_DONE;
 }
 
@@ -373,7 +424,158 @@ STATIC WORD getbpb(ddt * pddt)
   bpb *pbpbarray = &pddt->ddt_bpb;
   unsigned secs_per_cyl;
   WORD ret;
+#if defined(PC88VA)
+  typedef struct {
+    UWORD mode;
+    UWORD cylinders;
+    UWORD total;
+    UWORD sectors_per_track;
+    UWORD heads;
+    UWORD sector_bytes;
+    UBYTE media;
+    UBYTE standard_signature;
+  } pc88va_m16_profile;
+  static const pc88va_m16_profile profiles[] = {
+    {0x02, 40, 640, 8, 2, 512, 0xff, 1},   /* 2D 320 KiB */
+    {0x02, 40, 720, 9, 2, 512, 0xfd, 1},   /* 2D 360 KiB */
+    {0x12, 80, 1280, 8, 2, 512, 0xfb, 1},  /* 2DD 640 KiB */
+    {0x12, 80, 1440, 9, 2, 512, 0xf9, 1},  /* 2DD 720 KiB */
+    {0x22, 80, 2400, 15, 2, 512, 0xf9, 1}, /* 2HC 1.2 MiB */
+    {0x23, 80, 1280, 8, 2, 1024, 0xfe, 0}, /* existing M15 2HD */
+    {0x23, 77, 1232, 8, 2, 1024, 0xfe, 0} /* 77-cylinder 2HD */
+  };
+  unsigned profile_index;
+  UBYTE saw_read = FALSE;
+  UBYTE legacy_native = FALSE;
 
+  /* pddt->ddt_descflags |= DF_NOACCESS;
+   * disabled for now - problems with FORMAT ?? */
+
+  /* set drive to not accessible and changed */
+  if (diskchange(pddt) != M_NOT_CHANGED)
+    pddt->ddt_descflags |= DF_DISKCHANGE;
+
+  pddt->ddt_descflags |= DF_NOACCESS;
+  for (profile_index = 0;
+       profile_index < sizeof(profiles) / sizeof(profiles[0]);
+       profile_index++)
+  {
+    const pc88va_m16_profile *profile = &profiles[profile_index];
+    BYTE *raw_bpb = (BYTE *)&DiskTransferBuffer[BT_BPB];
+    bpb observed;
+    UBYTE signature;
+    UBYTE short_bpb;
+
+    ret = pc88va_m16_probe_read(pddt->ddt_driveno, profile->mode,
+                                (UBYTE FAR *)DiskTransferBuffer);
+    if (ret != 0)
+      continue;
+    saw_read = TRUE;
+    signature = DiskTransferBuffer[0x1fe] == 0x55 &&
+                DiskTransferBuffer[0x1ff] == 0xaa;
+    memcpy(&observed, raw_bpb, sizeof(observed));
+    short_bpb = DiskTransferBuffer[0x26] != 0x28 &&
+                DiskTransferBuffer[0x26] != 0x29;
+    if (short_bpb)
+    {
+      /* The native formatter stores a DOS-era BPB with a 16-bit hidden
+         sector field. Later bytes are IPL instructions, not extended fields. */
+      observed.bpb_hidden &= 0xffffUL;
+      observed.bpb_huge = 0;
+    }
+    /* A plausible BPB must pass the normal validator, never a fallback. */
+    if (profile->mode == 0x23 && observed.bpb_nbyte != 512 &&
+        observed.bpb_nbyte != 1024 && !signature &&
+        DiskTransferBuffer[0x26] != 0x28 && DiskTransferBuffer[0x26] != 0x29)
+      legacy_native = TRUE;
+
+    if (observed.bpb_nbyte != profile->sector_bytes ||
+        observed.bpb_nsize != profile->total || observed.bpb_huge != 0 ||
+        observed.bpb_nsecs != profile->sectors_per_track ||
+        observed.bpb_nheads != profile->heads ||
+        observed.bpb_mdesc != profile->media || observed.bpb_hidden != 0 ||
+        observed.bpb_nsector == 0 ||
+        (observed.bpb_nsector & (observed.bpb_nsector - 1)) != 0 ||
+        observed.bpb_nreserved == 0 || observed.bpb_nfat != 2 ||
+        observed.bpb_ndirent == 0 || observed.bpb_nfsect == 0 ||
+        profile->total != profile->cylinders * profile->heads *
+                          profile->sectors_per_track)
+      continue;
+    if (profile->standard_signature && !signature && !short_bpb)
+      continue;
+    if (!profile->standard_signature && !short_bpb &&
+        ((DiskTransferBuffer[0x1fe] == 0x55) !=
+         (DiskTransferBuffer[0x1ff] == 0xaa)))
+      continue;
+    if (pc88va_m16_set_profile(pddt->ddt_driveno, profile->mode,
+                               profile->total, profile->sectors_per_track,
+                               profile->heads) != 0)
+      continue;
+
+    if (short_bpb && !signature)
+    {
+      unsigned fat_copy;
+      ULONG lba;
+      for (fat_copy = 0; fat_copy < 2; fat_copy++)
+      {
+        lba = observed.bpb_nreserved +
+              (ULONG)fat_copy * observed.bpb_nfsect;
+        if (lba >= profile->total ||
+            fl_read(pddt->ddt_driveno,
+                    (UWORD)(lba / profile->sectors_per_track % 2),
+                    (UWORD)(lba / (profile->sectors_per_track * 2)),
+                    (UWORD)(lba % profile->sectors_per_track + 1), 1,
+                    (UBYTE FAR *)DiskTransferBuffer) != 0 ||
+            DiskTransferBuffer[0] != profile->media ||
+            DiskTransferBuffer[1] != 0xff || DiskTransferBuffer[2] != 0xff)
+          break;
+      }
+      if (fat_copy != 2 ||
+          fl_read(pddt->ddt_driveno, 1, profile->cylinders - 1,
+                  profile->sectors_per_track, 1,
+                  (UBYTE FAR *)DiskTransferBuffer) != 0)
+        continue;
+      /* The buffer no longer holds the IPL; never parse data as an EBPB. */
+      DiskTransferBuffer[0x26] = 0;
+    }
+    memcpy(pbpbarray, &observed, sizeof(observed));
+    pddt->ddt_ncyl = profile->cylinders;
+    pddt->ddt_descflags &= ~DF_NOACCESS;
+    goto read_extended_bpb;
+  }
+
+  /* Native legacy FAT12 has no boot BPB.  Recognition is read-only while
+     DF_NOACCESS remains set: require both FAT reserved entries and the final
+     sector of the explicit native profile.  Do not infer a writable layout
+     from an unreadable boot sector or arbitrary unrecognized BPB fields. */
+  if (legacy_native &&
+      pc88va_m16_set_profile(pddt->ddt_driveno, 0x23, 1232, 8, 2) == 0)
+  {
+    static const bpb native_bpb = {1024, 1, 1, 2, 192, 1232,
+                                   0xfe, 2, 8, 2, 0, 0};
+    unsigned fat_sector;
+    for (fat_sector = 2; fat_sector <= 4; fat_sector += 2)
+    {
+      if (fl_read(pddt->ddt_driveno, 0, 0, fat_sector, 1,
+                  (UBYTE FAR *)DiskTransferBuffer) != 0 ||
+          DiskTransferBuffer[0] != 0xfe || DiskTransferBuffer[1] != 0xff ||
+          DiskTransferBuffer[2] != 0xff)
+        break;
+    }
+    if (fat_sector == 6 &&
+        fl_read(pddt->ddt_driveno, 1, 76, 8, 1,
+                (UBYTE FAR *)DiskTransferBuffer) == 0)
+    {
+      memcpy(pbpbarray, &native_bpb, sizeof(native_bpb));
+      pddt->ddt_descflags &= ~DF_NOACCESS;
+      /* The buffer now contains data, not an extended boot record. */
+      DiskTransferBuffer[0x26] = 0;
+      goto read_extended_bpb;
+    }
+  }
+  pddt->ddt_descflags |= DF_DISKCHANGE;
+  return saw_read ? failure(E_FAILURE) : failure(E_NOTRDY);
+#else
   /* pddt->ddt_descflags |= DF_NOACCESS; 
    * disabled for now - problems with FORMAT ?? */
 
@@ -400,7 +602,11 @@ STATIC WORD getbpb(ddt * pddt)
 /*TE ~ 200 bytes*/
 
   memcpy(pbpbarray, &DiskTransferBuffer[BT_BPB], sizeof(bpb));
+#endif
 
+#ifdef PC88VA
+read_extended_bpb:
+#endif
   /*?? */
   /*  2b is fat16 volume label. if memcmp, then offset 0x36.
      if (fstrncmp((BYTE *) & DiskTransferBuffer[0x36], "FAT16",5) == 0  ||
@@ -504,6 +710,12 @@ STATIC WORD IoctlQueblk(rqptr rp, ddt * pddt)
   if (rp->r_cat == 8)
 #endif
   {
+#if defined(PC88VA)
+    UBYTE fun = rp->r_fun & 0xdf;
+    if ((fun >= 0x40 && fun <= 0x42) ||
+        (fun >= 0x46 && fun <= 0x47))
+      return S_DONE;
+#else
     switch (rp->r_fun)
     {
     case 0x46:
@@ -513,6 +725,7 @@ STATIC WORD IoctlQueblk(rqptr rp, ddt * pddt)
     case 0x67:
       return S_DONE;
     }
+#endif
   }
   return failure(E_CMD);
 }
@@ -718,7 +931,11 @@ STATIC WORD Genblkdev(rqptr rp, ddt * pddt)
         {
           register BYTE extended_BPB_signature = 
             DiskTransferBuffer[(pddt->ddt_bpb.bpb_nfsect != 0 ? 0x26 : 0x42)];
+#if defined(PC88VA)
+          if ((extended_BPB_signature != 0x29) && (extended_BPB_signature != 0x28))
+#else
           if ((extended_BPB_signature != 0x29) || (extended_BPB_signature != 0x28))
+#endif
             return failure(E_MEDIA);
         }
 
@@ -819,20 +1036,42 @@ STATIC WORD blockio(rqptr rp, ddt * pddt)
       action = LBA_WRITE_VERIFY;
       break;
     default:
+#if defined(PC88VA)
+      rp->r_count = 0;
+#endif
       return failure(E_FAILURE);
   }
 
   if (pddt->ddt_descflags & DF_NOACCESS)      /* drive inaccessible */
+#if defined(PC88VA)
+  {
+    rp->r_count = 0;
+#endif
     return failure(E_FAILURE);
+#if defined(PC88VA)
+  }
 
+#else
+
+#endif
   tmark(pddt);
   start = (rp->r_start != HUGECOUNT ? rp->r_start : rp->r_huge);
   pbpb = hd(pddt->ddt_descflags) ? &pddt->ddt_defbpb : &pddt->ddt_bpb;
   size = (pbpb->bpb_nsize ? pbpb->bpb_nsize : pbpb->bpb_huge);
+#if defined(PC88VA)
+
+  if (start >= size || rp->r_count > size - start)
+#else
 
   if (start >= size || start + rp->r_count > size)
+#endif
   {
+#if defined(PC88VA)
+    rp->r_count = 0;
+    return failure(E_NOTFND);
+#else
     return 0x0408;
+#endif
   }
   start += pddt->ddt_offset;
 
@@ -987,17 +1226,32 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
   unsigned char driveno = pddt->ddt_driveno;
 
   int num_retries;
+#if defined(PC88VA)
+  unsigned retry_limit;
 
+#else
+
+#endif
 	UWORD bytes_sector = pddt->ddt_bpb.bpb_nbyte;   /* bytes per sector, usually 512 */
   *transferred = 0;
+#if defined(PC88VA)
+  retry_limit = N_RETRY;
   
   /* only low-level format floppies for now ! */
+#else
+  
+  /* only low-level format floppies for now ! */
+#endif
   if (mode == LBA_FORMAT && hd(pddt->ddt_descflags))
     return 0;
 
   /* optionally change from A: to B: or back */
   play_dj(pddt);
 
+#if !defined(PC88VA)
+  /* The INT 1Eh diskette parameter table belongs to the IBM-PC BIOS ABI.
+     The VA adapter supplies its geometry in each native request and must
+     neither write through that vector nor reset the native BIOS here. */
   if (!hd(pddt->ddt_descflags))
   {
     UBYTE FAR  *int1e_ptr = (UBYTE FAR *)getvec(0x1e);
@@ -1009,6 +1263,7 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
       fl_reset(driveno);
     }
   }
+#endif
         
 /*    
     if (LBA_address+totaltodo > pddt->total_sectors)
@@ -1023,8 +1278,29 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
   {
     /* avoid overflowing 64K DMA boundary */
     count = DMA_max_transfer(buffer, totaltodo);
+#if defined(PC88VA)
+
+#if defined(PC88VA)
+    /* The legacy fl_* ABI has no completed-sector result.  Dispatching one
+       VA sector per common write call keeps r_count exact on an error and
+       prevents the common retry loop from replaying a dirty caller buffer on
+       a newly inserted medium.  The resident VA core still owns its bounded
+       firmware retries. */
+    if (((mode & 0xff00) == LBA_WRITE || mode == LBA_VERIFY) && count > 1)
+      count = 1;
+    if ((mode & 0xfffd) == LBA_WRITE)
+      retry_limit = 1;
+#endif
+
+    if (FP_SEG(buffer) >= 0xa000 || count == 0
+#if defined(PC88VA)
+        || mode == LBA_VERIFY
+#endif
+       )
+#else
 
     if (FP_SEG(buffer) >= 0xa000 || count == 0)
+#endif
     {
       transfer_address = DiskTransferBuffer;
       count = 1;
@@ -1038,8 +1314,13 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
     {
       transfer_address = buffer;
     }
+#if defined(PC88VA)
+
+    for (num_retries = 0; num_retries < retry_limit; num_retries++)
+#else
 
     for (num_retries = 0; num_retries < N_RETRY; num_retries++)
+#endif
     {
       if ((pddt->ddt_descflags & DF_LBA) && mode != LBA_FORMAT)
       {
@@ -1082,6 +1363,16 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
           count = pbpb->bpb_nsecs + 1 - chs.Sector;
         }
 
+#if defined(PC88VA)
+        /* For the defined LBA modes, bit 8 marks writes; FORMAT is separate. */
+        error_code = (mode == LBA_FORMAT ? fl_format :
+                      (mode & 0x0100) ? fl_write : fl_read) (driveno,
+                                                          chs.Head,
+                                                          chs.Cylinder,
+                                                          chs.Sector,
+                                                          count,
+                                                          transfer_address);
+#else
         error_code = (mode == LBA_READ ? fl_read :
                       mode == LBA_VERIFY ? fl_verify :
                       mode ==
@@ -1091,6 +1382,7 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
                                                           chs.Sector,
                                                           count,
                                                           transfer_address);
+#endif
 
         if (error_code == 0 && mode == LBA_WRITE_VERIFY)
         {
@@ -1101,7 +1393,11 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
       if (error_code == 0)
         break;
 
+#if !defined(PC88VA)
+      /* VA transfer recovery belongs to its resident adapter. Do not add
+         a common BIOS reset after that adapter returns a final error. */
       fl_reset(driveno);
+#endif
 
     }                           /* end of retries */
 
@@ -1112,7 +1408,11 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
 
     /* copy to user buffer if nesessary */
     if (transfer_address == DiskTransferBuffer &&
+#if defined(PC88VA)
+        mode == LBA_READ)
+#else
         (mode & 0xff00) == (LBA_READ & 0xff00))
+#endif
     {
       fmemcpy(buffer, DiskTransferBuffer, bytes_sector);
     }
@@ -1121,7 +1421,10 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
     LBA_address += count;
     totaltodo -= count;
 
-    buffer = adjust_far((char FAR *)buffer + count * bytes_sector);
+#if defined(PC88VA)
+    if (mode != LBA_VERIFY)
+#endif
+      buffer = adjust_far((char FAR *)buffer + count * bytes_sector);
   }
 
   return (error_code);

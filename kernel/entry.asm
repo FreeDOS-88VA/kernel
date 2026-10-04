@@ -49,6 +49,8 @@ segment HMA_TEXT
                 extern   int21regs_off
 
                 extern   _Int21AX
+                extern   _pc88va_int21_syscall_bridge
+                extern   _pc88va_int21_service_far
 
                 extern  _DGROUP_
 
@@ -77,6 +79,10 @@ segment HMA_TEXT
 ; in psp). We convert it to a normal call and correct the stack to appear same
 ; as if invoked via an int 21h call including proper return address.
 ;
+global _reloc_call_cpm_entry
+_reloc_call_cpm_entry:
+global reloc_call_cpm_entry_
+reloc_call_cpm_entry_:
 reloc_call_cpm_entry:
                 ; Stack is:
                 ;       return offset
@@ -235,9 +241,20 @@ reloc_call_int20_handler:
 ;       VOID INRPT far
 ;       int21_handler(iregs UserRegs)
 ;
+; Export a C-visible alias for the PC-88VA post-MoveKernel vector refresh.
+; The unprefixed name remains the historical assembler entry used by the
+; HMA relocation table.
+global _reloc_call_int21_handler
+_reloc_call_int21_handler:
+global reloc_call_int21_handler_
+reloc_call_int21_handler_:
 reloc_call_int21_handler:
                 cmp     ah,25h
+global pc88va_int21_cmp25_branch_probe
+pc88va_int21_cmp25_branch_probe:
                 je      int21_func25
+global pc88va_int21_cmp25_fallthrough_probe
+pc88va_int21_cmp25_fallthrough_probe:
                 cmp     ah,35h
                 je      int21_func35
                 ;
@@ -266,26 +283,65 @@ int21_reentry:
                 mov     dx,[cs:_DGROUP_]
                 mov     ds,dx
 
+%ifdef PC88VA
+                ; The bootstrap's first INT 21h call is SET DTA (AH=1Ah).
+                ; Keep it on the normal service stack explicitly; this
+                ; avoids relying on the legacy user-call dispatch table while
+                ; the relocated resident entry is being brought up.
+global pc88va_int21_ah1a_probe
+pc88va_int21_ah1a_probe:
+                cmp     ah,1ah
+                je      int21_1
+global pc88va_int21_ah1a_fallthrough_probe
+pc88va_int21_ah1a_fallthrough_probe:
+%endif
+
                 cmp     ah,33h
                 je      int21_user
                 cmp     ah,50h
                 je      int21_user
                 cmp     ah,51h
                 je      int21_user
+global pc88va_int21_dispatch_probe
+pc88va_int21_dispatch_probe:
                 cmp     ah,62h
+global pc88va_int21_dispatch_after_cmp_probe
+pc88va_int21_dispatch_after_cmp_probe:
                 jne     int21_1
 
+global pc88va_int21_user_probe
+pc88va_int21_user_probe:
 int21_user:     
+%ifdef PC88VA
+                ; Setting the current PSP is a bounded init-time state
+                ; update.  The PC-88VA bootstrap has no concurrent server
+                ; hook yet, so avoid the INT 2A critical-section round trip
+                ; that is not available until the resident stack is live.
+                cmp     ah,50h
+                je      short int21_user_nocrit
+%endif
                 call    dos_crit_sect
+int21_user_nocrit:
 
+global pc88va_int21_before_syscall_probe
+pc88va_int21_before_syscall_probe:
                 push    ss
                 push    bp
+%ifdef PC88VA
+                ; Route through a compiler-generated medium-model bridge so
+                ; the C dispatcher receives the conventional SS:BP frame
+                ; with its correct FAR call/return ABI.
+                call    far _pc88va_int21_syscall_bridge
+%else
                 call    _int21_syscall
+%endif
                 pop     cx
                 pop     cx
                 jmp     short int21_ret
 
-int21_func25:
+global pc88va_int21_func25_probe
+pc88va_int21_func25_probe:
+                int21_func25:
                 push    es
                 push    bx
                 xor     bx,bx
@@ -317,6 +373,8 @@ int21_func35:
 ; BX=userSP
 
 
+global pc88va_int21_normal_probe
+pc88va_int21_normal_probe:
 int21_1:
                 mov si,ss   ; save user stack, to be retored later
 
@@ -358,10 +416,16 @@ int21_onerrorstack:
                 push    si  ; user SS:SP
                 push    bp
                 
+%ifdef PC88VA
+                call    far _pc88va_int21_service_far
+%else
                 call    _int21_service
+%endif
                 jmp     short int21_exit_nodec
 
                 
+global pc88va_int21_stackselect_probe
+pc88va_int21_stackselect_probe:
 int21_2:        inc     byte [_InDOS]
                 mov     cx,_char_api_tos
                 or      ah,ah   
@@ -369,8 +433,12 @@ int21_2:        inc     byte [_InDOS]
                 cmp     ah,0ch
                 jbe     int21_normalentry
 
+global pc88va_int21_crit_probe
+pc88va_int21_crit_probe:
 int21_3:
                 call    dos_crit_sect
+global pc88va_int21_after_crit_probe
+pc88va_int21_after_crit_probe:
                 mov     cx,_disk_api_tos
 
 int21_normalentry:
@@ -387,7 +455,13 @@ int21_normalentry:
                 
                 push    si  ; user SS:SP
                 push    bp
+global pc88va_int21_before_service_probe
+pc88va_int21_before_service_probe:
+%ifdef PC88VA
+                call    far _pc88va_int21_service_far
+%else
                 call    _int21_service
+%endif
 
 int21_exit:     dec     byte [_InDOS]
 
@@ -419,6 +493,8 @@ int21_ret:
 ;   end Dos Critical Section 0 thur 7
 ;
 ;
+global pc88va_dos_crit_sect_probe
+pc88va_dos_crit_sect_probe:
 dos_crit_sect:
                 mov     [_Int21AX],ax       ; needed!
                 push    ax                  ; This must be here!!!
@@ -494,7 +570,11 @@ int2526:
                 push    dx                      ; SS:SP -> user stack
                 push    cx
                 push    ax                      ; was set on entry = 25,26
+%ifdef PC88VA
+                call    far _int2526_handler
+%else
                 call    _int2526_handler
+%endif
                 add     sp, byte 6
 
                 pop     cx
@@ -537,6 +617,12 @@ PSP_PARENT      equ     16h
 PSP_USERSP      equ     2eh
 PSP_USERSS      equ     30h
 
+%ifdef PC88VA
+; The medium-model C caller supplies a far return address.
+CRITICAL_ARG_BASE equ   6
+%else
+CRITICAL_ARG_BASE equ   4
+%endif
 
 
 ;
@@ -552,7 +638,11 @@ _CriticalError:
                 je      CritErr05               ; Jump if equal
 
                 mov     ax,FAIL
+%ifdef PC88VA
+                retf
+%else
                 retn
+%endif
                 ;
                 ; Do local error processing
                 ;
@@ -567,15 +657,15 @@ CritErr05:
                 ;
                 ; Get parameters
                 ;
-                mov     ah,byte [bp+4]      ; nFlags
-                mov     al,byte [bp+6]      ; nDrive
-                mov     di,word [bp+8]      ; nError
+                mov     ah,byte [bp+CRITICAL_ARG_BASE]      ; nFlags
+                mov     al,byte [bp+CRITICAL_ARG_BASE+2]    ; nDrive
+                mov     di,word [bp+CRITICAL_ARG_BASE+4]    ; nError
                 ;
                 ;       make cx:si point to dev header
                 ;       after registers restored use bp:si
                 ;
-                mov     si,word [bp+10]     ; lpDevice Offset
-                mov     cx,word [bp+12]     ; lpDevice segment
+                mov     si,word [bp+CRITICAL_ARG_BASE+6]    ; lpDevice Offset
+                mov     cx,word [bp+CRITICAL_ARG_BASE+8]    ; lpDevice segment
                 ;
                 ; Now save real ss:sp and retry info in internal stack
                 ;
@@ -625,7 +715,7 @@ CritErr05:
                 pop     word [es:PSP_USERSP]
                 pop     word [es:PSP_USERSS]
                 mov     bp, sp
-                mov     ah, byte [bp+4+4]       ; restore old AH from nFlags
+                mov     ah, byte [bp+CRITICAL_ARG_BASE+4] ; nFlags, below saved SI/DI
                 sti                             ; Enable interrupts
                 ;
                 ; clear flags
@@ -671,7 +761,11 @@ CritErrExit:
                 pop     di
                 pop     si
                 pop     bp
+%ifdef PC88VA
+                retf
+%else
                 ret
+%endif
 
                 ;
                 ; Abort processing.

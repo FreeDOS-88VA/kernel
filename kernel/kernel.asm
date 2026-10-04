@@ -44,8 +44,10 @@ STACK_SIZE      equ     384/2           ; stack allocated in words
 ;************************************************************       
 
 %ifidn __OUTPUT_FORMAT__, obj
+global ..start
 ..start:
 %endif
+global entry
 entry:  
                 jmp short realentry
 
@@ -96,6 +98,12 @@ configend:
 
 realentry:                              ; execution continues here
 
+%ifdef PC88VA
+                ; The PC-88VA loader has already established the resident
+                ; entry contract.  IBM-PC trace output and INT 10h are not
+                ; valid platform services here.
+                jmp     IGROUP:kernel_start
+%else
                 push ax
                 push bx
                 pushf              
@@ -107,6 +115,7 @@ realentry:                              ; execution continues here
                 pop ax
 
                 jmp     IGROUP:kernel_start
+%endif
 beyond_entry:   times   256-(beyond_entry-entry) db 0
                                         ; scratch area for data (DOS_PSP)
 
@@ -120,6 +129,49 @@ segment INIT_TEXT
                 ;
 kernel_start:
 
+%ifdef PC88VA
+                ; Keep the common segment groups, but do not relocate through
+                ; an IBM-PC INT 12h/BDA path.  The PC-88VA memory adapter has
+                ; already reserved the resident callback and stack area.
+                cli
+                ; The MZ handoff has installed the validated resident stack
+                ; (SS:SP at the exact image stack top).  Keep it intact so
+                ; the M10 stack-arena contract can account for the caller
+                ; frame without moving into I_GROUP's discardable data.
+                push    cs
+                pop     ds
+                push    cs
+                pop     es
+                cld
+                extern  pc88va_machine_init_far_
+                call    far pc88va_machine_init_far_
+                or      ax,ax
+                jnz     kernel_platform_halt
+                mov     ds,[cs:_INIT_DGROUP]
+                extern  _m13_layout
+                cmp     word [_m13_layout+22],1
+                jne     kernel_platform_halt
+                ; M10 has returned: no bootstrap frame remains. INIT gets
+                ; its own high stack before C creates any local pointers.
+                mov     ax,[_m13_layout+16]
+                mov     ss,ax
+                mov     sp,[_m13_layout+18]
+                push    ds
+                pop     es
+                ; Watcom C entry points use BP as the caller stack frame.
+                ; The resident MZ handoff already established SS:SP, so
+                ; mirror the common `cont` setup without changing ownership
+                ; of that validated stack arena.
+                mov     bp,sp
+                cld
+                ; INIT_TEXT lives in HMA_TEXT while FreeDOSmain is resident
+                ; _TEXT; make the cross-segment handoff explicit.
+                jmp     far _FreeDOSmain
+kernel_platform_halt:
+                cli
+                hlt
+                jmp short kernel_platform_halt
+%else
                 push bx
                 pushf              
                 mov ax, 0e32h           ; '2' Tracecode - kernel entered
@@ -217,6 +269,7 @@ cont:           ; Now set up call frame
                 mov     ds,ax
                 mov     es,ax
                 jmp     _FreeDOSmain
+%endif
 
 %if XCPU != 86
         cpu 8086
@@ -794,10 +847,14 @@ __ib_end:
 
 ; kernel startup stack
                 global  init_tos
+%ifndef PC88VA
                 resw 512
+%endif
 init_tos:
 ; the last paragraph of conventional memory might become an MCB
+%ifndef PC88VA
                 resb 16
+%endif
                 global __init_end
 __init_end:
 init_end:        
@@ -886,12 +943,27 @@ _DGROUP_        dw DGROUP
 
 %ifdef WATCOM
 ;               32 bit multiplication + division
+%ifdef PC88VA
+; Medium-model callers use FAR calls; also export the underscore-suffixed
+; Open Watcom runtime names.
+global __U4M
+global __U4M_
+__U4M:
+__U4M_:
+                LMULU 1
+global __U4D
+global __U4D_
+__U4D:
+__U4D_:
+                LDIVMODU 1
+%else
 global __U4M
 __U4M:
                 LMULU
 global __U4D
 __U4D:
                 LDIVMODU
+%endif
 %endif
 
 %ifdef gcc
@@ -931,7 +1003,22 @@ __HMATextEnd:                   ; and c version
 ; The default stack (_TEXT:0) will overwrite the data area, so I create a dummy
 ; stack here to ease debugging. -- ror4
 
-segment _STACK  class(STACK) nobits stack
+%ifdef PC88VA_M13
+; segs.inc declares the discardable INIT group before STACK so this
+; bootstrap stack remains outside its file-backed source range.
+segment _STACK class(STACK) nobits stack align=16
+%else
+segment _STACK class(STACK) nobits stack
+%endif
+
+%ifdef PC88VA
+; Export the exclusive upper boundary of the complete startup stack.  The
+; PC-88VA loader restores SS to this segment, and the allocator must reserve
+; the full stack before creating the first MCB.
+global __pc88va_stack_end
+resb 1000h
+__pc88va_stack_end:
+%endif
 
 
 
@@ -1010,17 +1097,23 @@ _int19_handler: jmp 0:reloc_call_int19_handler
 _cpm_entry:     jmp 0:reloc_call_cpm_entry
                 call near forceEnableA20
 
+%ifndef PC88VA
                 global  _reloc_call_blk_driver
+                global  reloc_call_blk_driver_
                 extern  _blk_driver
+reloc_call_blk_driver_:
 _reloc_call_blk_driver:
                 jmp 0:_blk_driver
                 call near forceEnableA20
 
                 global  _reloc_call_clk_driver
+                global  reloc_call_clk_driver_
                 extern  _clk_driver
+reloc_call_clk_driver_:
 _reloc_call_clk_driver:
                 jmp 0:_clk_driver
                 call near forceEnableA20
+%endif
 
                 global  _CharMapSrvc ; in _DATA (see AARD)
                 extern  _reloc_call_CharMapSrvc
@@ -1035,6 +1128,22 @@ _init_call_p_0: jmp  0:reloc_call_p_0
 
    global __HMARelocationTableEnd
 __HMARelocationTableEnd:    
+
+%ifdef PC88VA
+                ; These C drivers remain resident; they are not HMA entries.
+                ; Bind both words through the linker, outside the moving table.
+                global _reloc_call_blk_driver, reloc_call_blk_driver_
+                extern _blk_driver
+reloc_call_blk_driver_:
+_reloc_call_blk_driver:
+                jmp seg _blk_driver:_blk_driver
+
+                global _reloc_call_clk_driver, reloc_call_clk_driver_
+                extern _clk_driver
+reloc_call_clk_driver_:
+_reloc_call_clk_driver:
+                jmp seg _clk_driver:_clk_driver
+%endif
 
 ;
 ; if we were lucky, we found all entries from the outside to the kernel.
