@@ -1,0 +1,12 @@
+option map=build/KVA8616.map
+option statics
+option verbose
+format dos
+file build/startup.obj
+file build/loader_services.obj
+file build/console.obj
+file build/machine_services.obj
+file build/console_input.obj
+file build/resident_disk.obj
+library build/platform.lib
+name build/KVA8616.exe

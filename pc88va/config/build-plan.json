@@ -1,0 +1,68 @@
+{
+  "artifact_role": "pc88va-kernel-entry-carrier-with-early-console-input",
+  "objects": [
+    {
+      "classification": "pc88va-owned",
+      "object": "pc88va/build/startup.obj",
+      "reason": "Retains the MZ entry and early-console diagnostic, then invokes single-shot M10 initialization and a separate optional fatal control.",
+      "source": "pc88va/kernel/startup.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "pc88va-owned",
+      "includes": [
+        "pc88va/boot/disk_read.inc",
+        "pc88va/boot/loader_abi.inc",
+        "pc88va/boot/loader_handoff.inc",
+        "pc88va/boot/mz_transform.inc",
+        "pc88va/boot/mz_validate.inc"
+      ],
+      "object": "pc88va/build/loader_services.obj",
+      "reason": "Uses the same parameterized disk and zero-relocation MZ handoff cores as the loader; no private firmware values are embedded.",
+      "source": "pc88va/kernel/loader_services.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "pc88va-owned",
+      "object": "pc88va/build/console.obj",
+      "reason": "Adapts printable ASCII and CR/LF to the independently public PC-88VA Text BIOS service.",
+      "source": "pc88va/kernel/console.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "pc88va-owned",
+      "object": "pc88va/build/machine_services.obj",
+      "reason": "Implements conservative arena discovery, inherited interrupt-state validation, bounded observed-edge clock, initialization and fatal stop.",
+      "source": "pc88va/kernel/machine_services.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "pc88va-owned",
+      "object": "pc88va/build/console_input.obj",
+      "reason": "Polls the read-only keyboard matrix and runs a bounded-count early input diagnostic without driver echo or firmware calls.",
+      "source": "pc88va/kernel/console_input.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "pc88va-owned",
+      "object": "pc88va/build/resident_disk.obj",
+      "reason": "M12 resident read-only request entry and accepted firmware callback; uses the unchanged M08 validated transfer core and kernel-owned buffer.",
+      "source": "pc88va/kernel/resident_disk.asm",
+      "stub_removal_milestone": null
+    },
+    {
+      "classification": "temporary-fail-closed-stub",
+      "object": "pc88va/build/stubs.obj",
+      "reason": "Defines unresolved PC-88VA platform services with explicit failure returns.",
+      "source": "pc88va/kernel/stubs.c",
+      "stub_removal_milestone": "M17"
+    }
+  ],
+  "output": "pc88va/bin/KERNEL.SYS",
+  "schema_version": 1,
+  "target_macros": [
+    "DBCS",
+    "JAPAN",
+    "PC88VA"
+  ]
+}

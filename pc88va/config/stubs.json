@@ -1,0 +1,15 @@
+{
+  "failure_return": -1,
+  "interfaces": [
+    {
+      "abi": "near C call; caller-owned NLS request pointer; signed 16-bit status return",
+      "marker": "M06STUB:NLS_DBCS:M17",
+      "name": "pc88va_nls_hook",
+      "removal_milestone": "M17",
+      "service": "machine-coupled DBCS and NLS hook"
+    }
+  ],
+  "probe_marker": "M06STUB:PLATFORM_PROBE:FAIL_CLOSED",
+  "probe_return": 65535,
+  "schema_version": 1
+}

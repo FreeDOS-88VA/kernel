@@ -1,0 +1,43 @@
+{
+  "abi": {
+    "argument": "AX unsigned 16-bit character",
+    "calling_convention": "Open Watcom 1.9 small-model near register call",
+    "error": "AX=65535 before firmware invocation",
+    "preserved": ["BX", "CX", "DX", "SI", "DI", "BP", "DS", "ES", "SS", "FLAGS"],
+    "stack": "valid caller near-return stack; wrapper uses at most 22 additional bytes excluding firmware interrupt frame and firmware stack",
+    "success": "AX=0 means the validated firmware request returned; display success is independently observed"
+  },
+  "character_policy": {
+    "bottom_row": "inherited firmware scrolling; qualification required, no replacement scrolling implementation",
+    "carriage_return": "return to first logical column without changing logical row",
+    "line_feed": "advance logical row preserving logical column",
+    "printable_first": 32,
+    "printable_last": 126,
+    "unsupported": "reject without BIOS call or cursor mutation",
+    "wrap": "inherited firmware logical row boundary; distinct from renderer raster width"
+  },
+  "diagnostic_ascii": "\rFreeDOS/PC-88VA M09\r\n012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nCONSOLE OK\r\n",
+  "mechanism": {
+    "attribute_dx": 32768,
+    "function_ah": 2,
+    "interrupt": 131,
+    "pointer": "DS:SI points to one byte followed by NUL in caller stack",
+    "type": "preserved PC-88VA Text BIOS"
+  },
+  "non_reentrant": true,
+  "preconditions": [
+    "accepted M08 kernel-entry ownership and valid MZ stack",
+    "inherited nonzero firmware vector and valid display state",
+    "inherited BIOS ROM-bank and interrupt-controller operational state; per-call bank and mask restoration required",
+    "firmware handler returns within externally bounded qualification",
+    "private qualification proves firmware stack use within owned reserve"
+  ],
+  "public_source": {
+    "commit": "7463f9501d84701f50f3243d5067b6a9dfd0c2e7",
+    "locator": "docs/modernization/openwatcom-build-environment.md: Building SQEMM98 for PC-88VA",
+    "repository": "https://github.com/nakatamaho/vaeg"
+  },
+  "readiness": "missing vector rejected; no invented firmware status or polling timeout recovery",
+  "schema_version": 1,
+  "scope": "early ASCII output only; no input, NLS, ANSI or machine initialization"
+}

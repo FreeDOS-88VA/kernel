@@ -1,0 +1,268 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# M13 Open Watcom target: common FreeDOS core plus PC-88VA adapters.
+
+CC=wcc
+NASM=nasm
+LINKER=wlink
+PYTHON=python3
+
+# The common DOS core uses the medium model: normal function calls are FAR,
+# while ordinary data pointers remain NEAR. Interfaces that cross segments
+# (including fmemcpy's explicit FAR pointers) retain their declared FAR type.
+# The common core keeps its DOS data in DGROUP, matching the resident DS
+# contract established by the PC-88VA startup.
+# The M13 media contract uses 1024-byte sectors.  Keep the resident M12
+# scratch buffer at the one-sector capacity defined in disk_buffer.inc; size
+# the DOS transfer/buffer arena to the media sector so COMMAND.COM can be
+# loaded without allocating over the resident-code boundary.
+M13_BASE_CFLAGS=-zq -0 -mm -bt=DOS -os -s -we -e5 -zp1 -zl -d1 -DPC88VA -DMAX_SEC_SIZE=1024 -DBIG_SECTOR=1 -I=../hdr -I=../kernel -I=kernel -I=build
+M13_BASE_NASMFLAGS=-f obj -DPC88VA -DPC88VA_M13 -DWATCOM -DXCPU=86 -i../hdr/ -i../kernel/ -iboot/
+# Visible M13 diagnostics are opt-in for private diagnosis.  The normal
+# candidate must not emit stage, allocator, EXEC, or input markers.
+M13_DIAG_FLAGS=
+M13_DIAG_NASM_FLAGS=
+M10_DIAG_NASM_FLAGS=
+!ifdef M13_VISIBLE_DIAGNOSTICS
+M13_DIAG_FLAGS=-DM13_VISIBLE_DIAGNOSTICS
+M13_DIAG_NASM_FLAGS=-DM13_VISIBLE_DIAGNOSTICS
+!endif
+!ifdef M10_VISIBLE_DIAGNOSTICS
+M10_DIAG_NASM_FLAGS=-DM10_VISIBLE_DIAGNOSTICS
+!endif
+CFLAGS=$(M13_BASE_CFLAGS) $(M13_DIAG_FLAGS)
+INIT_CFLAGS=$(CFLAGS) -nt=M13_INIT_TEXT -nc=M13INIT -g=M13_INIT_GROUP
+NASMFLAGS=$(M13_BASE_NASMFLAGS) $(M13_DIAG_NASM_FLAGS) $(M10_DIAG_NASM_FLAGS)
+
+COMMON_ASM=kernel entry io serial printer asmsupt execrh nlssupt procsupt dosidle int2f apisupt intr irqstack memdisk cpu
+COMMON_C=blockio break chario dosfns dsk error fatdir fatfs fattab fcbfns inthndlr ioctl memmgr misc lfnapi newstuff network nls prf strings syspack systime task main config initoem initdisk initclk sysclk
+OBJECTS=build/kernel.obj build/entry.obj build/io.obj build/serial.obj build/printer.obj build/asmsupt.obj build/execrh.obj build/nlssupt.obj build/procsupt.obj build/dosidle.obj build/int2f.obj build/apisupt.obj build/intr.obj build/irqstack.obj build/memdisk.obj build/cpu.obj build/blockio.obj build/break.obj build/chario.obj build/dosfns.obj build/dsk.obj build/error.obj build/fatdir.obj build/fatfs.obj build/fattab.obj build/fcbfns.obj build/inthndlr.obj build/ioctl.obj build/memmgr.obj build/misc.obj build/lfnapi.obj build/newstuff.obj build/network.obj build/nls.obj build/prf.obj build/iprf.obj build/dyninit.obj build/inithma.obj build/nls_hc.obj build/strings.obj build/syspack.obj build/systime.obj build/task.obj build/main.obj build/config.obj build/initoem.obj build/initdisk.obj build/initclk.obj build/sysclk.obj build/m13_diag.obj build/console_m13.obj build/m13_platform.obj build/machine_services.obj build/console_input.obj build/resident_disk.obj build/stubs.obj
+
+all: build/pc88va_build_id.h bin/KERNEL.SYS
+
+build/pc88va_build_id.h: build_id.py build_id.txt
+	-mkdir -p build bin
+	$(PYTHON) build_id.py --output $@
+
+# wmake deliberately uses explicit rules here.  The pinned Open Watcom 1.9
+# wmake does not implement GNU make's foreach/eval extensions, and a silently
+# ignored generated rule would produce a loader-only link.
+build/kernel.obj: ../kernel/kernel.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/kernel.asm
+build/entry.obj: ../kernel/entry.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/entry.asm
+build/io.obj: ../kernel/io.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/io.asm
+build/serial.obj: ../kernel/serial.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/serial.asm
+build/printer.obj: ../kernel/printer.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/printer.asm
+build/asmsupt.obj: ../kernel/asmsupt.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/asmsupt.asm
+build/execrh.obj: ../kernel/execrh.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/execrh.asm
+build/nlssupt.obj: ../kernel/nlssupt.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/nlssupt.asm
+build/procsupt.obj: ../kernel/procsupt.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/procsupt.asm
+build/dosidle.obj: ../kernel/dosidle.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/dosidle.asm
+build/int2f.obj: ../kernel/int2f.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/int2f.asm
+build/apisupt.obj: ../kernel/apisupt.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/apisupt.asm
+build/intr.obj: ../kernel/intr.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/intr.asm
+build/irqstack.obj: ../kernel/irqstack.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/irqstack.asm
+build/memdisk.obj: ../kernel/memdisk.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/memdisk.asm
+build/cpu.obj: ../kernel/cpu.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/cpu.asm
+
+build/blockio.obj: ../kernel/blockio.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/blockio.c
+build/break.obj: ../kernel/break.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/break.c
+build/chario.obj: ../kernel/chario.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/chario.c
+build/dosfns.obj: ../kernel/dosfns.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/dosfns.c
+build/dsk.obj: ../kernel/dsk.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/dsk.c
+build/error.obj: ../kernel/error.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/error.c
+build/fatdir.obj: ../kernel/fatdir.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/fatdir.c
+build/fatfs.obj: ../kernel/fatfs.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/fatfs.c
+build/fattab.obj: ../kernel/fattab.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/fattab.c
+build/fcbfns.obj: ../kernel/fcbfns.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/fcbfns.c
+build/inthndlr.obj: ../kernel/inthndlr.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/inthndlr.c
+build/ioctl.obj: ../kernel/ioctl.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/ioctl.c
+build/memmgr.obj: ../kernel/memmgr.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/memmgr.c
+build/misc.obj: ../kernel/misc.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/misc.c
+build/lfnapi.obj: ../kernel/lfnapi.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/lfnapi.c
+build/newstuff.obj: ../kernel/newstuff.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/newstuff.c
+build/network.obj: ../kernel/network.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/network.c
+build/nls.obj: ../kernel/nls.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/nls.c
+build/prf.obj: ../kernel/prf.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/prf.c
+build/iprf.obj: ../kernel/iprf.c
+	-mkdir -p build bin
+	# INIT uses a separate SS; far pointers to its varargs/local buffers must
+	# retain SS rather than assuming the medium-model SS == DGROUP default.
+	$(CC) $(INIT_CFLAGS) -zu -fo=$@ ../kernel/iprf.c
+build/dyninit.obj: ../kernel/dyninit.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -fo=$@ ../kernel/dyninit.c
+build/inithma.obj: ../kernel/inithma.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -fo=$@ ../kernel/inithma.c
+build/iasmsupt.obj: ../kernel/asmsupt.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -D_INIT -o $@ ../kernel/asmsupt.asm
+build/nls_hc.obj: ../kernel/nls_hc.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ ../kernel/nls_hc.asm
+build/strings.obj: ../kernel/strings.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/strings.c
+build/syspack.obj: ../kernel/syspack.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/syspack.c
+build/systime.obj: ../kernel/systime.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/systime.c
+build/task.obj: ../kernel/task.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/task.c
+build/main.obj: ../kernel/main.c build/pc88va_build_id.h
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -zu -fo=$@ ../kernel/main.c
+build/config.obj: ../kernel/config.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -zu -fo=$@ ../kernel/config.c
+build/initoem.obj: ../kernel/initoem.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -fo=$@ ../kernel/initoem.c
+build/initdisk.obj: ../kernel/initdisk.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -fo=$@ ../kernel/initdisk.c
+build/initclk.obj: ../kernel/initclk.c
+	-mkdir -p build bin
+	$(CC) $(INIT_CFLAGS) -fo=$@ ../kernel/initclk.c
+
+build/m13_lifetime.obj: kernel/m13_lifetime.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ kernel/m13_lifetime.c
+build/sysclk.obj: ../kernel/sysclk.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ ../kernel/sysclk.c
+
+build/m13_diag.obj: kernel/m13_diag.c kernel/m13_diag.h kernel/console.h
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ kernel/m13_diag.c
+
+build/console_m13.obj: kernel/console.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/console.asm
+
+build/m13_platform.obj: kernel/m13_platform.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/m13_platform.asm
+
+build/loader_services.obj: kernel/loader_services.asm boot/loader_abi.inc boot/disk_read.inc boot/loader_handoff.inc boot/mz_validate.inc boot/mz_transform.inc
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/loader_services.asm
+
+build/machine_services.obj: kernel/machine_services.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/machine_services.asm
+
+build/console_input.obj: kernel/console_input.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/console_input.asm
+
+build/resident_disk.obj: kernel/resident_disk.asm boot/loader_abi.inc boot/disk_read.inc boot/disk_write.inc
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -Iboot/ -o $@ kernel/resident_disk.asm
+
+build/stubs.obj: kernel/stubs.c
+	-mkdir -p build bin
+	$(CC) $(CFLAGS) -fo=$@ kernel/stubs.c
+
+build/platform.lib: build/stubs.obj
+	-rm -f $@
+	$(PYTHON) -c "import os; epoch=int(os.environ['SOURCE_DATE_EPOCH']); os.utime('build/stubs.obj',(epoch,epoch))"
+	wlib -q $@ +build/stubs.obj
+
+build/m13_segments.obj: kernel/m13_segments.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/m13_segments.asm
+
+# Rebuild every participant when the explicit group contract changes.
+build/m13_segments.obj build/console_m13.obj build/m13_platform.obj build/machine_services.obj build/console_input.obj build/resident_disk.obj: kernel/m13_segments.inc
+build/kernel.obj build/main.obj build/config.obj build/inithma.obj: kernel/m13_layout.h
+
+build/model_banner.obj: kernel/model_banner.asm
+	-mkdir -p build bin
+	$(NASM) $(NASMFLAGS) -o $@ kernel/model_banner.asm
+
+build/KVA8616.exe: build/model_banner.obj $(OBJECTS) build/m13_segments.obj build/m13_lifetime.obj build/platform.lib config/m13-link.rsp
+	$(LINKER) @config/m13-link.rsp
+
+bin/KERNEL.SYS: build/KVA8616.exe
+	-mkdir -p bin
+	cp build/KVA8616.exe $@
+
+clean:
+	-rm -rf build bin
+
+# INIT grouping and the shared resident buffer bound affect these objects.
+build/kernel.obj build/entry.obj build/io.obj build/serial.obj build/printer.obj build/asmsupt.obj build/execrh.obj build/nlssupt.obj build/procsupt.obj build/dosidle.obj build/int2f.obj build/apisupt.obj build/intr.obj build/irqstack.obj build/memdisk.obj build/cpu.obj: ../kernel/segs.inc
+build/m13_platform.obj build/resident_disk.obj: kernel/disk_buffer.inc

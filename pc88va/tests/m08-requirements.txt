@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ROM-free execution QA only; not part of the guest or Open Watcom toolchain.
+# Official PyPI CPython ABI3 Linux x86_64 and aarch64 wheels, release 2.1.4.
+unicorn==2.1.4 \
+    --hash=sha256:9d6e6dea140560de4ebd8446661f7ef84a357d428c14a3ef09dacd306ec8c239 \
+    --hash=sha256:bd1fb0c9af5f57e356d8a96928b4fe045b2e18f308ef23b481d5f970008aa722
