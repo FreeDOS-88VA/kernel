@@ -318,16 +318,8 @@ STATIC struct table commands[] = {
   {"MENUCOLOR",0,CfgMenuColor},
 #endif
 
-#if defined(PC88VA)
-  {"MENUDEFAULT", 0, CfgFailure},
-#else
   {"MENUDEFAULT", 0, CfgMenuDefault},
-#endif
-#if defined(PC88VA)
-  {"MENU", 0, CfgFailure},         /* lines to print in pass 0 */
-#else
   {"MENU", 0, CfgMenu},         /* lines to print in pass 0 */
-#endif
   {"ECHO", 2, CfgMenu},         /* lines to print in pass 2 - install(high) */
   {"EECHO", 2, CfgMenuEsc},     /* modified ECHO (ea) */
 
@@ -2968,8 +2960,69 @@ STATIC VOID CfgMenuEsc(BYTE * pLine)
 STATIC VOID DoMenu(void)
 {
 #if defined(PC88VA)
-  /* VA menu graphics require a native implementation. */
-  return;
+  /* The VA has no PC video BIOS. MENUCOLOR is rejected, so only the plain
+     text form of the menu is offered: numbered lines and a digit key. */
+  int key = -1;
+  int i, j;
+  if (Menus == 0)
+    return;
+
+  InitKernelConfig.SkipConfigSeconds = -1;
+  Menus |= 1 << 0;              /* '0' Menu always allowed */
+
+  for (;;)
+  {
+    printf("Select from Menu [");
+    for (i = 0, j = 1; i <= 9; i++, j <<= 1)
+      if (Menus & j)
+        printf("%c", '0' + i);
+    printf("], or press [ENTER]");
+
+    if (MenuTimeout >= 0)
+      printf("- %d \b", MenuTimeout);
+    else
+      printf("    \b\b\b\b\b");
+
+    printf(" - Singlestepping (F8) is: %s \r", singleStep ? "ON " : "OFF");
+
+    key = GetBiosKey(MenuTimeout >= 0 ? 1 : -1);
+
+    if (key == -1)              /* timeout, take default */
+    {
+      if (MenuTimeout > 0)
+      {
+        MenuTimeout--;
+        continue;
+      }
+      break;
+    }
+    else
+      MenuTimeout = -1;
+
+    if (key == 0x3f00)          /* F5 */
+    {
+      SkipAllConfig = TRUE;
+      break;
+    }
+    if (key == 0x4200)          /* F8 */
+      singleStep = !singleStep;
+
+    key &= 0xff;
+
+    if (key == '\r' || key == 0x1b) /* CR/ESC - use default */
+      break;
+
+    if (isnum(key) && (Menus & (1 << (key - '0'))))
+    {
+      MenuSelected = key - '0';
+      break;
+    }
+  }
+  printf("\n");
+
+  /* export the current selected config  menu */
+  sprintf(envp, "CONFIG=%c", MenuSelected+'0');
+  envp += 9;
 #else
   INIT_LOCAL iregs r;
   int key = -1;
@@ -3085,9 +3138,6 @@ RestartInput:
 
 STATIC VOID CfgMenuDefault(BYTE * pLine)
 {
-#if defined(PC88VA)
-  CfgFailure(pLine);
-#else
   COUNT num = 0;
 
   pLine = skipwh(pLine);
@@ -3108,7 +3158,6 @@ STATIC VOID CfgMenuDefault(BYTE * pLine)
   {
     GetNumArg(++pLine, &MenuTimeout);
   }
-#endif
 }
 
 STATIC void ClearScreen(unsigned char attr)
