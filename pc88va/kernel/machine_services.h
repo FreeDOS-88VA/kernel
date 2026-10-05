@@ -6,7 +6,8 @@
  * preserved, except fatal_stop_request never returns and clears IF.
  * Call with IF=DF=0. Record pointers must designate the exported storage
  * in DS=CS. All integers are little endian. Version zero is invalid.
- * Initialization is single shot; state 2 alone means initialized.
+ * Initialization is single shot; state 2 alone means initialized. Its memory
+ * and interrupt checks run in the discarded boot text, not as resident calls.
  */
 #pragma pack(push, 1)
 struct pc88va_memory_interval {
@@ -24,10 +25,7 @@ struct pc88va_clock_record {
 };
 #pragma pack(pop)
 int pc88va_machine_init(void);
-int pc88va_memory_query(void *record);
-int pc88va_interrupts_init(void);
 int pc88va_clock_read(void *record);
 int pc88va_fatal_stop_request(unsigned short reason);
-extern struct pc88va_memory_record pc88va_m10_memory_record;
 extern struct pc88va_clock_record pc88va_m10_clock_record;
 #endif

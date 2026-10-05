@@ -13,7 +13,11 @@ TARGET = Path(__file__).resolve().parents[1]
 NAMES = ['pc88va_machine_init_', 'pc88va_memory_query_', 'pc88va_interrupts_init_',
          'pc88va_clock_read_', 'pc88va_fatal_stop_request_', 'pc88va_m10_memory_record_',
          'pc88va_m10_clock_record_', 'pc88va_m10_state_', 'm10_ticks', 'm10_clock_busy',
-         'm10_arena', 'm10_arena_end', 'pc88va_m10_halt', 'm10_storage_end', 'm10_clock_origin']
+         'm10_frame', 'm10_boot_end', 'pc88va_m10_halt', 'm10_clock_origin']
+# Initialization keeps its interrupt snapshot and arena in its own stack frame
+# (1024 + 256 bytes below the saved registers); FRAME stands in for it when a
+# helper is exercised directly.
+FRAME = 0x0400
 CODE, STACK, STOP = 0x1000, 0x1800, 0xff00
 
 
@@ -91,6 +95,8 @@ class ServicesTests(unittest.TestCase):
         self.assertEqual(self.data('pc88va_m10_state_',1),b'\x02')
         self.assertEqual(bytes(self.printed),b'M10 INIT OK\r\n')
         self.assertEqual(self.data('m10_ticks',4),struct.pack('<I',1))
+        # The arena was the initialization frame; its record is withdrawn.
+        self.assertEqual(self.data(NAMES[5],2),b'\0\0')
         previous=bytes(self.cpu.mem_read(CODE*16,len(self.binary)))
         self.assertEqual(self.call(NAMES[0]),0xffff)
         self.assertEqual(bytes(self.cpu.mem_read(CODE*16,len(self.binary))),previous)
@@ -105,7 +111,7 @@ class ServicesTests(unittest.TestCase):
         self.assertEqual(self.printed,[])
 
     def test_linker_intra_paragraph_stack_boundary(self):
-        end=self.symbols['m10_storage_end']
+        end=self.symbols['m10_boot_end']
         self.assertEqual(self.call(NAMES[0],stack=CODE+end//16,sp=0x0ffe+end%16),0)
         self.assertEqual(self.data(NAMES[7],1),b'\x02')
 
@@ -114,6 +120,7 @@ class ServicesTests(unittest.TestCase):
         self.assertEqual(self.data(NAMES[7],1),b'\x03')
 
     def test_memory_partition(self):
+        self.put('m10_frame',struct.pack('<H',FRAME))
         self.assertEqual(self.call(NAMES[1],self.symbols[NAMES[5]]),0)
         record=self.data(NAMES[5],34)
         self.assertEqual(struct.unpack_from('<HH',record),(1,3))
@@ -124,6 +131,7 @@ class ServicesTests(unittest.TestCase):
         self.assertEqual(rows[0][1],rows[1][0])
         self.assertEqual(rows[1][1],rows[2][0])
         self.assertEqual(rows[1][1]-rows[1][0],256)
+        self.assertEqual(rows[1][0],STACK*16+FRAME+1024)
         self.assertTrue(all(start<end for start,end,_ in rows))
 
     def test_invalid_records_and_segments_are_unchanged(self):
@@ -134,9 +142,11 @@ class ServicesTests(unittest.TestCase):
                 self.assertEqual(bytes(self.cpu.mem_read(CODE*16,len(self.binary))),before)
 
     def test_interrupt_adoption_and_drift(self):
+        self.put('m10_frame',struct.pack('<H',FRAME))
         ivt=bytes(self.cpu.mem_read(0,1024))
         self.assertEqual(self.call(NAMES[2]),0)
         self.assertEqual(bytes(self.cpu.mem_read(0,1024)),ivt)
+        self.assertEqual(bytes(self.cpu.mem_read(STACK*16+FRAME,1024)),ivt)
         self.assertEqual(self.call(NAMES[2]),0)
         self.masks[0x186]^=1
         self.assertEqual(self.call(NAMES[2]),0xffff)

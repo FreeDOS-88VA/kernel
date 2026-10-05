@@ -127,6 +127,10 @@ segment	IB_E      	class(IB)  align=2 nobits
 ; Define the alias after the historical declarations so it never joins TGROUP.
 segment M13_INIT_TEXT class=M13INIT public align=16 use16
 group M13_INIT_GROUP M13_INIT_TEXT
+; One-shot machine boot text follows the INIT source and precedes the
+; bootstrap stack: the bridge copies the HMA text to the resident hull end
+; before the kernel starts, so the boot text must not sit there.
+segment M10_BOOT_TEXT class=M10BOOT public use16
 %undef IGROUP
 %define IGROUP M13_INIT_GROUP
 %define INIT_TEXT M13_INIT_TEXT

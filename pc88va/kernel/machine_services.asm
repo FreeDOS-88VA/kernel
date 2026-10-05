@@ -20,17 +20,39 @@ cpu 8086
 ; LGROUP.
 %ifdef PC88VA_M13
 %include "kernel/m13_segments.inc"
+%macro RESIDENT_TEXT 0
 segment M13_PLATFORM_TEXT
+%endmacro
+; Initialization is single shot and runs before INIT reuses this memory.
+%macro BOOT_TEXT 0
+segment M10_BOOT_TEXT
+%endmacro
 %else
 segment _TEXT class=CODE public use16
+%macro RESIDENT_TEXT 0
+segment _TEXT
+%endmacro
+%macro BOOT_TEXT 0
+segment _TEXT
+%endmacro
 %endif
 extern pc88va_console_putc_
+%else
+%macro RESIDENT_TEXT 0
+%endmacro
+%macro BOOT_TEXT 0
+%endmacro
 %endif
 
+; The interrupt-vector snapshot and the conservative arena live in the
+; initialization stack frame; neither is needed once initialization returns.
+M10_IVT_BYTES equ 1024
+M10_ARENA_BYTES equ 256
+M10_FRAME_BYTES equ M10_IVT_BYTES + M10_ARENA_BYTES
+
 global pc88va_machine_init_, pc88va_machine_init_far_
-global pc88va_memory_query_, pc88va_interrupts_init_
 global pc88va_clock_read_, pc88va_fatal_stop_request_
-global pc88va_m10_memory_record_, pc88va_m10_clock_record_
+global pc88va_m10_clock_record_
 global pc88va_m10_state_, pc88va_m10_control_
 global pc88va_m10_i2, pc88va_m10_i3, pc88va_m10_i4
 global pc88va_m10_i5, pc88va_m10_i6, pc88va_m10_i7, pc88va_m10_i8
@@ -62,6 +84,7 @@ global pc88va_m10_f2, pc88va_m10_f3, pc88va_m10_halt
         ret
 %endmacro
 
+        BOOT_TEXT
 pc88va_machine_init_:
         ENTER
         test word [ss:bp+16], 0600h
@@ -99,14 +122,14 @@ pc88va_machine_init_:
         jc m10_init_failed
         add ax, bx
         jc m10_init_failed
-        cmp ax, m10_storage_end
+        cmp ax, m10_boot_end
         jb m10_init_failed
         mov ax, ss
         add ax, 0101h
         jc m10_init_failed
         cmp ax, 0a000h
         ja m10_init_failed
-        cmp bp, 0100h
+        cmp bp, 0100h + M10_FRAME_BYTES
         jb m10_init_failed
         cmp bp, 0ffeh
         ja m10_init_failed
@@ -119,6 +142,8 @@ pc88va_machine_init_:
         in al, dx
         and al, 01fh
         mov [cs:m10_banks+1], al
+        sub sp, M10_FRAME_BYTES
+        mov [cs:m10_frame], sp
 pc88va_m10_i2:
         mov ax, pc88va_m10_memory_record_
         call pc88va_memory_query_
@@ -170,6 +195,9 @@ pc88va_m10_i7:
         jne m10_init_failed
 pc88va_m10_i8:
         mov byte [cs:pc88va_m10_state_], 2
+        ; The mapped arena was the initialization frame; it is released now.
+        mov word [cs:pc88va_m10_memory_record_], 0
+        mov sp, bp
         xor ax, ax
         LEAVE
 m10_init_failed:
@@ -182,6 +210,7 @@ m10_init_failed:
         mov word [cs:pc88va_m10_memory_record_], 0
         mov word [cs:pc88va_m10_clock_record_], 0
 m10_init_bad:
+        mov sp, bp
         mov ax, -1
         LEAVE
 
@@ -214,16 +243,18 @@ pc88va_memory_query_:
         mov dx, cs
         cmp ax, dx
         jne .bad
-        mov ax, cs
+        mov ax, ss
         mov bx, 16
         mul bx
-        add ax, m10_arena
+        add ax, [cs:m10_frame]
+        adc dx, 0
+        add ax, M10_IVT_BYTES
         adc dx, 0
         cmp dx, 000ah
         jae .bad
         mov bx, ax
         mov cx, dx
-        add bx, m10_arena_end-m10_arena
+        add bx, M10_ARENA_BYTES
         adc cx, 0
         cmp cx, 000ah
         jae .bad
@@ -263,11 +294,11 @@ pc88va_interrupts_init_:
         or ax, [es:0083h*4+2]
         jz .bad
         xor si, si
-        mov di, m10_ivt
+        mov di, [cs:m10_frame]
         mov cx, 512
 .copy:
         mov ax, [es:si]
-        mov [cs:di], ax
+        mov [ss:di], ax
         add si, 2
         add di, 2
         loop .copy
@@ -289,11 +320,11 @@ m10_interrupts_compare:
         xor ax, ax
         mov es, ax
         xor si, si
-        mov di, m10_ivt
+        mov di, [cs:m10_frame]
         mov cx, 512
 .loop:
         mov ax, [es:si]
-        cmp ax, [cs:di]
+        cmp ax, [ss:di]
         jne .bad
         add si, 2
         add di, 2
@@ -312,6 +343,7 @@ m10_interrupts_compare:
         mov ax, -1
         ret
 
+        RESIDENT_TEXT
 pc88va_clock_read_:
         ENTER
         test word [ss:bp+16], 0600h
@@ -382,6 +414,7 @@ pc88va_m10_halt:
         hlt
         jmp short pc88va_m10_halt
 
+        BOOT_TEXT
 %ifdef M10_VISIBLE_DIAGNOSTICS
 m10_message: db 'M10 INIT OK',13,10,0
         db 'M10SERVICE:MACHINE_INIT:SINGLE_SHOT',0
@@ -390,17 +423,17 @@ m10_message: db 'M10 INIT OK',13,10,0
         db 'M10SERVICE:CLOCK:OBSERVED_VRTC_EDGE',0
         db 'M10SERVICE:FATAL_STOP:CLI_HLT',0
 %endif
-pc88va_m10_state_: db 0
-pc88va_m10_control_: db 0
 m10_interrupts_valid: db 0
-m10_clock_busy: db 0
-m10_clock_origin: db 0
 m10_masks: dw 0
 m10_banks: dw 0
-m10_ticks: dd 0
+m10_frame: dw 0
 pc88va_m10_memory_record_: times 34 db 0
+m10_boot_end:
+
+        RESIDENT_TEXT
+pc88va_m10_state_: db 0
+pc88va_m10_control_: db 0
+m10_clock_busy: db 0
+m10_clock_origin: db 0
+m10_ticks: dd 0
 pc88va_m10_clock_record_: times 6 db 0
-m10_ivt: times 1024 db 0
-m10_arena: times 256 db 0
-m10_arena_end:
-m10_storage_end:
