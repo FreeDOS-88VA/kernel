@@ -156,10 +156,12 @@ VOID ASMCFUNC FreeDOSmain(void)
   /* The common library's far-copy entry is linked with the large-model
      stack/DGROUP convention.  The M13 medium-model build keeps DOS data in
      DS, so that entry would interpret the caller's frame in the wrong order
-     and never return.  Copy the small fixed configuration directly while
-     retaining the declared far source at physical 0000:0002. */
+     and never return.  Copy the small fixed configuration directly from
+     LowKernelConfig.  Its link address 0000:0002 is relative to the kernel
+     image; at run time it follows the resident base (PC88VA_LOADSEG:0002),
+     and physical 0000:0002 is the interrupt vector table. */
   {
-    BYTE FAR *source = (BYTE FAR *)MK_FP(0, 2);
+    BYTE FAR *source = (BYTE FAR *)&LowKernelConfig;
     BYTE *destination = (BYTE *)&InitKernelConfig;
     unsigned int index;
     for (index = 0; index < sizeof(InitKernelConfig); ++index)
