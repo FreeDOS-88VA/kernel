@@ -210,10 +210,12 @@ global pc88va_m13_init_device_pointer_capture_
 global pc88va_m13_init_device_pre_execrh_probe_
 global pc88va_m13_init_device_post_execrh_probe_
 global pc88va_m13_init_device_next_probe_
+%ifndef PC88VA_M13
 global pc88va_console_diagnostic_
 global _pc88va_m09_message
 global _pc88va_m09_diagnostic_complete
 global _pc88va_console_preconditions_valid
+%endif
 global pc88va_console_putc_.ready
 global pc88va_console_putc_.firmware
 
@@ -483,6 +485,9 @@ pc88va_diag_putc_:
         call pc88va_console_putc_
         retf
 
+; Milestone diagnostics are entered only from the compile-only startup.asm
+; entry; the linked M13 kernel does not keep them resident.
+%ifndef PC88VA_M13
 pc88va_console_diagnostic_:
         pushf
         push si
@@ -520,3 +525,4 @@ _pc88va_m09_message:
         db '012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'
         db 13, 10, 'CONSOLE OK', 13, 10, 0
         db 'M09SERVICE:CONSOLE_PUTC:TEXT_BIOS', 0
+%endif

@@ -849,7 +849,10 @@ m16_shift_down:
         and al, 0ch
         ret
 
+; Milestone diagnostics are entered only from the compile-only startup.asm
+; entry; the linked M13 kernel does not keep them resident.
 %ifndef M11_FLAT_TEST
+%ifndef PC88VA_M13
 global pc88va_m11_diagnostic_, pc88va_m11_control_, pc88va_m11_count_
 global pc88va_m11_empty_count_, pc88va_m11_history_
 global pc88va_m11_k1, pc88va_m11_k4, pc88va_m11_k5, pc88va_m11_k8, pc88va_m11_k9
@@ -916,4 +919,5 @@ pc88va_m11_count_: dw 0
 pc88va_m11_empty_count_: dw 0
 pc88va_m11_history_: times 8 dw 0
 db 'M11SERVICE:CONSOLE_GETC:MATRIX_POLL', 0
+%endif
 %endif

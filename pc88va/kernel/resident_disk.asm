@@ -38,11 +38,13 @@ global pc88va_kernel_disk_read_
 global pc88va_kernel_disk_write_
 global pc88va_kernel_firmware_read_one_
 global pc88va_kernel_firmware_write_one_
+%ifndef PC88VA_M13
 global pc88va_m12_prepare_
 global pc88va_m12_diagnostic_
 global pc88va_m12_control_
-global pc88va_m12_request_
 global pc88va_m12_result_
+%endif
+global pc88va_m12_request_
 global pc88va_m12_buffer_
 global pc88va_m12_drive_context_
 global pc88va_m12_call_flags_
@@ -282,6 +284,9 @@ pc88va_kernel_disk_write_:
         popf
         ret
 
+; Milestone diagnostics are entered only from the compile-only startup.asm
+; entry; the linked M13 kernel does not keep them resident.
+%ifndef PC88VA_M13
 ; Initialize the reusable record for one bounded resident request.  The
 ; caller may replace LBA/COUNT before invoking pc88va_kernel_disk_read_.
 pc88va_m12_prepare_:
@@ -349,10 +354,11 @@ pc88va_m12_diagnostic_:
 pc88va_m12_ok_message: db 'M12 READ OK', 13, 10, 0
 pc88va_m12_service_marker: db 'M12SERVICE:DISK_READ:RESIDENT', 0
 pc88va_m12_control_: db 0
+pc88va_m12_result_: times 4 db 0
+%endif
 pc88va_m12_drive_context_: dw 0
 pc88va_m12_call_flags_: dw 0
 pc88va_m12_request_: times 48 db 0
-pc88va_m12_result_: times 4 db 0
 align 16, db 0
 pc88va_m12_storage_begin:
 pc88va_m12_buffer_: times PC88VA_DISK_BUFFER_BYTES db 0
