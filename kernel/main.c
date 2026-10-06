@@ -318,6 +318,7 @@ STATIC void setup_int_vectors(void)
 {
 #if defined(PC88VA)
   extern unsigned char pc88va_vectors_atomic;
+  intvec pc88va_mouse_bios;
 #endif
   static struct vec
   {
@@ -395,8 +396,21 @@ STATIC void setup_int_vectors(void)
 #endif
   for (plvec = intvec_table; plvec < intvec_table + 5; plvec++)
     plvec->isv = getvec(plvec->intno);
+#if defined(PC88VA)
+  /* INT 33h is the PC-88VA ROM mouse BIOS, not a later mouse driver. */
+  pc88va_mouse_bios = getvec(0x33);
+#endif
   for (i = 0x23; i <= 0x3f; i++)
     setvec(i, empty_handler);
+#if defined(PC88VA)
+  setvec(0x33, pc88va_mouse_bios);
+  /* Animation BIOS (88h) writes 10A00h; the V1/V2 supervisor (90h) and its
+     CALLN interface (95h) are RAM vectors into 10000h. That memory is the
+     kernel here, so these services return CF=1. */
+  setvec(0x88, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
+  setvec(0x90, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
+  setvec(0x95, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
+#endif
   HaltCpuWhileIdle = 0;
   for (pvec = vectors; pvec < vectors + (sizeof vectors/sizeof *pvec); pvec++)
     setvec(pvec->intno, (intvec)MK_FP(FP_SEG(empty_handler), pvec->handleroff));

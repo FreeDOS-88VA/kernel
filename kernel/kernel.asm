@@ -1036,6 +1036,17 @@ _int28_handler:
 _int2a_handler:
 _empty_handler:
                 iret
+%ifdef PC88VA
+                ; PC-88VA ROM services that would write into memory now used
+                ; by the kernel are replaced by this handler: CF=1 to caller.
+                global _pc88va_bios_absent_handler
+_pc88va_bios_absent_handler:
+                push    bp
+                mov     bp, sp
+                or      byte [bp+6], 1
+                pop     bp
+                iret
+%endif
     
 
 global _initforceEnableA20

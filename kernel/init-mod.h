@@ -216,6 +216,9 @@ VOID ASMCFUNC FAR int0_handler(void);
 VOID ASMCFUNC FAR int6_handler(void);
 VOID ASMCFUNC FAR int19_handler(void);
 VOID ASMCFUNC FAR empty_handler(void);
+#if defined(PC88VA)
+VOID ASMCFUNC FAR pc88va_bios_absent_handler(void);
+#endif
 VOID ASMCFUNC FAR int20_handler(void);
 VOID ASMCFUNC FAR int21_handler(void);
 VOID ASMCFUNC FAR int22_handler(void);
