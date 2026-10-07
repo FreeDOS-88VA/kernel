@@ -404,9 +404,11 @@ STATIC void setup_int_vectors(void)
     setvec(i, empty_handler);
 #if defined(PC88VA)
   setvec(0x33, pc88va_mouse_bios);
-  /* Animation BIOS (88h) writes 10A00h; the V1/V2 supervisor (90h) and its
-     CALLN interface (95h) are RAM vectors into 10000h. That memory is the
-     kernel here, so these services return CF=1. */
+  /* The advanced graphics (87h) and animation (88h) BIOS use RAM work
+     areas, and the V1/V2 supervisor (90h) and its CALLN interface (95h)
+     are RAM vectors, in the memory that holds the kernel here. These
+     services therefore return CF=1. */
+  setvec(0x87, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
   setvec(0x88, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
   setvec(0x90, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
   setvec(0x95, (intvec)MK_FP(FP_SEG(empty_handler), FP_OFF(pc88va_bios_absent_handler)));
