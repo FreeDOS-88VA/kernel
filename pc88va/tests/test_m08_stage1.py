@@ -81,14 +81,17 @@ class Stage1Tests(unittest.TestCase):
                 uc.emu_stop()
             if address == adapter:
                 request = uc.reg_read(UC_X86_REG_DS) * 16 + uc.reg_read(UC_X86_REG_SI)
-                words = struct.unpack("<24H", uc.mem_read(request, 48))
-                # Current LBA/offset/segment follow the public RD ABI.
-                lba, offset, destination = words[21], words[19], words[20]
-                reads.append(lba)
+                words = struct.unpack("<25H", uc.mem_read(request, 50))
+                # Current LBA/offset/segment and the version 2 run follow the
+                # public RD ABI; the callback returns the sectors transferred.
+                self.assertEqual(words[0], 2)
+                lba, offset, destination, run = words[21], words[19], words[20], words[24]
+                reads.append((lba, run))
                 if not error:
-                    uc.mem_write(destination * 16 + offset, payload[(lba-19)*1024:(lba-18)*1024])
+                    uc.mem_write(destination * 16 + offset,
+                                 payload[(lba-19)*1024:(lba-19+run)*1024])
                 uc.reg_write(UC_X86_REG_AX, 1 if error else 0)
-                uc.reg_write(UC_X86_REG_CX, 512 if short else 1024)
+                uc.reg_write(UC_X86_REG_CX, run - 1 if short else run)
                 uc.reg_write(UC_X86_REG_IP, uc.reg_read(UC_X86_REG_IP) + 3)
 
         machine.hook_add(UC_HOOK_CODE, instruction)
@@ -97,7 +100,8 @@ class Stage1Tests(unittest.TestCase):
 
     def test_extent_loaded_and_opaque_context_transferred(self):
         reads, entered, actual, expected = self.execute()
-        self.assertEqual(reads, [19, 20, 21, 22])
+        # LBA 19 is sector 4 of its track: the four sectors go in one call.
+        self.assertEqual(reads, [(19, 4)])
         self.assertEqual(entered, [(7, 2)])
         self.assertEqual(actual, expected)
 

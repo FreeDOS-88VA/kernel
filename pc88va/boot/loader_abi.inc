@@ -27,6 +27,12 @@
 %define RD_REMAINING        44
 %define RD_RETRIES_LEFT     46
 %define RD_SIZE             48
+; Version 2 requests add RD_RUN: the core passes the callback a run of
+; sectors within one track and one 64 KiB physical page, and the callback
+; transfers all of them and returns CX = sectors (version 1: CX = bytes of
+; exactly one sector).
+%define RD_RUN              48
+%define RD_SIZE2            50
 
 %define DISK_OK               0
 %define DISK_CONTRACT         1
@@ -94,7 +100,11 @@
 %define FL_CLUSTER_BYTES   36
 %define FL_FILE_POSITION   38
 %define FL_COPY_BYTES      40
-%define FL_SIZE            42
+%define FL_RUN             42
+%define FL_WHOLE           44
+%define FL_PENDING         46
+%define FL_RUN_STATE       48
+%define FL_SIZE            50
 %define FILE_CONTRACT      30
 %define FILE_RANGE         31
 %define FILE_BYTECHECK     32

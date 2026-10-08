@@ -27,7 +27,12 @@ pc88va_disk_read_core:
     cmp si, 65536-RD_SIZE
     ja .contract
     cmp word [si+RD_VERSION], 1
+    je .version_ok
+    cmp word [si+RD_VERSION], 2
     jne .contract
+    cmp si, 65536-RD_SIZE2
+    ja .contract
+.version_ok:
     mov word [si+RD_COMPLETED], 0
     mov word [si+RD_ADAPTER_STATUS], 0
     mov ax, [si+RD_ADAPTER_OFFSET]
@@ -112,6 +117,36 @@ pc88va_disk_read_core:
     div word [si+RD_HEADS]
     mov [si+RD_CYLINDER], ax
     mov [si+RD_HEAD], dx
+    cmp word [si+RD_VERSION], 2
+    jne .run_ready
+    ; Run: to the track end, at most the remaining sectors, and within the
+    ; 64 KiB physical page of the current destination (at least one sector).
+    mov ax, [si+RD_SECTORS_TRACK]
+    sub ax, [si+RD_SECTOR]
+    inc ax
+    cmp ax, [si+RD_REMAINING]
+    jbe .run_track
+    mov ax, [si+RD_REMAINING]
+.run_track:
+    mov bx, ax
+    mov ax, [si+RD_CURRENT_SEGMENT]
+    mov cl, 4
+    shl ax, cl
+    add ax, [si+RD_CURRENT_OFFSET]
+    neg ax
+    jz .run_set
+    xor dx, dx
+    div word [si+RD_SECTOR_BYTES]
+    or ax, ax
+    jnz .run_page
+    inc ax
+.run_page:
+    cmp bx, ax
+    jbe .run_set
+    mov bx, ax
+.run_set:
+    mov [si+RD_RUN], bx
+.run_ready:
     mov ax, [si+RD_RETRIES]
     mov [si+RD_RETRIES_LEFT], ax
 .attempt:
@@ -130,6 +165,8 @@ pc88va_disk_read_core:
     dec word [si+RD_RETRIES_LEFT]
     jmp .attempt
 .completed_sector:
+    cmp word [si+RD_VERSION], 2
+    je .completed_run
     cmp cx, [si+RD_SECTOR_BYTES]
     jne .short
     mov ax, [si+RD_SECTOR_BYTES]
@@ -137,6 +174,18 @@ pc88va_disk_read_core:
     add [si+RD_CURRENT_OFFSET], ax
     inc word [si+RD_CURRENT_LBA]
     dec word [si+RD_REMAINING]
+    jnz .sector
+    xor ax, ax
+    jmp .restore
+.completed_run:
+    cmp cx, [si+RD_RUN]
+    jne .short
+    mov ax, [si+RD_SECTOR_BYTES]
+    mul cx
+    add [si+RD_COMPLETED], ax
+    add [si+RD_CURRENT_OFFSET], ax
+    add [si+RD_CURRENT_LBA], cx
+    sub [si+RD_REMAINING], cx
     jnz .sector
     xor ax, ax
     jmp .restore

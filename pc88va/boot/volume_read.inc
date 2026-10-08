@@ -36,7 +36,12 @@ pc88va_volume_read_core:
     cmp bx, 65536-RD_SIZE
     ja .contract
     cmp word [bx+RD_VERSION], 1
+    je .disk_version_ok
+    cmp word [bx+RD_VERSION], 2
     jne .contract
+    cmp bx, 65536-RD_SIZE2
+    ja .contract
+.disk_version_ok:
     mov si, [ds:bp+VM_VOLUME]
     cmp si, 65536-VP_SIZE
     ja .contract

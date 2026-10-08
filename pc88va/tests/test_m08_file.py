@@ -44,14 +44,14 @@ class FileLoadTests(unittest.TestCase):
         cls.temporary.cleanup()
 
     def execute(self, file_size=1100, spc=1, links=None, updates=None, results=None,
-                missing=False, corrupt_copy=False, disk_total=None):
-        disk = [1, 0, 1, 0x300, SCRATCH, 512,
+                missing=False, corrupt_copy=False, disk_total=None, version=1):
+        disk = [version, 0, 1, 0x300, SCRATCH, 512,
                 5 + 10 * spc if disk_total is None else disk_total, 4, 2, 512,
-                0x321, CALLBACK, CODE, 0] + [0] * 10
+                0x321, CALLBACK, CODE, 0] + [0] * 11
         fat = [1, 0x200, FAT, 32, 10, 2, 0, 0x500, VISITED, 512, 0, 0, 0]
         directory = [1, 0x100, ROOT, 1, 32, 10, 8192, 0, 0, 0]
         file_request = [1, RD, FT, RT, 0x400, FILE, 8192, 5, spc,
-                        0x300, SCRATCH, 512] + [0] * 9
+                        0x300, SCRATCH, 512] + [0] * 13
         for index, value in (updates or {}).items():
             file_request[index] = value
         table = bytearray(32)
@@ -82,17 +82,28 @@ class FileLoadTests(unittest.TestCase):
 
         def hook(cpu, address, size, _):
             if address == CODE * 16 + CALLBACK:
-                request = struct.unpack("<24H", cpu.mem_read(DATA * 16 + RD, 48))
-                calls.append(request[21])
+                request = struct.unpack("<25H", cpu.mem_read(DATA * 16 + RD, 50))
                 self.assertEqual(request[10], 0x321, "boot drive is propagated")
-                status, count = next(outcomes, (0, 512))
-                if status == 0:
-                    cpu.mem_write(request[20] * 16 + request[19],
-                                  bytes([request[21]]) * min(count, 512))
+                if version == 2:
+                    # The callback transfers RD_RUN sectors and returns their number.
+                    run = request[24]
+                    calls.append((request[21], run))
+                    status, count = next(outcomes, (0, run))
+                    if status == 0:
+                        cpu.mem_write(request[20] * 16 + request[19], b"".join(
+                            bytes([request[21] + n]) * 512 for n in range(min(count, run))))
+                else:
+                    calls.append(request[21])
+                    status, count = next(outcomes, (0, 512))
+                    if status == 0:
+                        cpu.mem_write(request[20] * 16 + request[19],
+                                      bytes([request[21]]) * min(count, 512))
                 cpu.reg_write(UC_X86_REG_AX, status)
                 cpu.reg_write(UC_X86_REG_CX, count)
             elif corrupt_copy and not corrupted[0] and bytes(cpu.mem_read(address, 2)) == b"\xf3\xa6":
-                cpu.mem_write(FILE * 16 + 0x400, b"\xff")
+                # Corrupt the first byte of the region being compared.
+                target = cpu.reg_read(UC_X86_REG_ES) * 16 + cpu.reg_read(UC_X86_REG_DI)
+                cpu.mem_write(target, b"\xff")
                 corrupted[0] = True
 
         machine.hook_add(UC_HOOK_CODE, hook)
@@ -104,7 +115,7 @@ class FileLoadTests(unittest.TestCase):
         self.assertEqual(machine.reg_read(UC_X86_REG_EFLAGS), 0x602 | int(status != 0))
         self.assertEqual(bytes(machine.mem_read(ROOT * 16 + 0x100, 32)), root_bytes)
         self.assertEqual(bytes(machine.mem_read(FAT * 16 + 0x200, 32)), bytes(table))
-        final = struct.unpack("<21H", machine.mem_read(DATA * 16 + FL, 42))
+        final = struct.unpack("<25H", machine.mem_read(DATA * 16 + FL, 50))
         self.assertEqual(final[:12], tuple(file_request[:12]))
         self.assertEqual(bytes(machine.mem_read(FILE * 16 + 0x3ff, 1)), b"\xa5")
         if file_size <= 8192:
@@ -168,8 +179,26 @@ class FileLoadTests(unittest.TestCase):
         self.assertEqual((status, calls), (31, []))
 
     def test_copy_bytecheck_detects_corruption(self):
+        # Whole sectors load directly; the final partial sector is copied
+        # from the scratch buffer and compared.
         status, calls, final, _ = self.execute(corrupt_copy=True)
+        self.assertEqual((status, calls, final[13]), (32, [5, 7, 6], 1024))
+        status, calls, final, _ = self.execute(file_size=100, links={2: 0xfff},
+                                               corrupt_copy=True)
         self.assertEqual((status, calls, final[13]), (32, [5], 0))
+
+    def test_version2_consecutive_clusters_load_in_one_request(self):
+        # Clusters 2-3-4 are consecutive: two whole sectors in one run, then
+        # the final partial sector through the scratch buffer.
+        status, calls, final, payload = self.execute(
+            links={2: 3, 3: 4, 4: 0xfff}, file_size=1100, version=2)
+        self.assertEqual((status, calls, final[13]), (0, [(5, 2), (7, 1)], 1100))
+        self.assertEqual(payload, bytes([5]) * 512 + bytes([6]) * 512 + bytes([7]) * 76)
+
+    def test_version2_fragmented_file(self):
+        status, calls, final, payload = self.execute(version=2)
+        self.assertEqual((status, calls, final[13]), (0, [(5, 1), (7, 1), (6, 1)], 1100))
+        self.assertEqual(payload, bytes([5]) * 512 + bytes([7]) * 512 + bytes([6]) * 76)
 
 
 if __name__ == "__main__":

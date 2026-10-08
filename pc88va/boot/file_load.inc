@@ -38,7 +38,12 @@ pc88va_file_load_core:
     cmp bx, 65536-RD_SIZE
     ja .contract
     cmp word [bx+RD_VERSION], 1
+    je .disk_version_ok
+    cmp word [bx+RD_VERSION], 2
     jne .contract
+    cmp bx, 65536-RD_SIZE2
+    ja .contract
+.disk_version_ok:
     mov di, [ds:bp+FL_FAT]
     cmp di, 65536-FT_SIZE
     ja .contract
@@ -149,6 +154,94 @@ pc88va_file_load_core:
     add ax, [ds:bp+FL_SECTOR_INDEX]
     jc .range
     mov [si+RD_LBA], ax
+    ; Whole sectors still to load go straight to the destination, in one
+    ; request through consecutive clusters.  A final partial sector uses
+    ; the scratch buffer and the byte check below.
+    mov ax, [ds:bp+FL_REMAINING]
+    xor dx, dx
+    div word [si+RD_SECTOR_BYTES]
+    or ax, ax
+    jnz .run_start
+    jmp .scratch_sector
+.run_start:
+    mov [ds:bp+FL_WHOLE], ax
+    mov cx, [ds:bp+FL_SECTORS_CLUSTER]
+    sub cx, [ds:bp+FL_SECTOR_INDEX]
+    mov word [ds:bp+FL_RUN_STATE], 0
+    cmp cx, ax
+    jbe .run_cluster
+    ; Fewer whole sectors than remain in this cluster: stay inside it.
+    mov [ds:bp+FL_RUN], ax
+    mov word [ds:bp+FL_RUN_STATE], 2
+    jmp .run_read
+.run_cluster:
+    mov [ds:bp+FL_RUN], cx
+.run_extend:
+    mov ax, [ds:bp+FL_RUN]
+    add ax, [ds:bp+FL_SECTORS_CLUSTER]
+    cmp ax, [ds:bp+FL_WHOLE]
+    ja .run_read
+    ; Another whole cluster follows, so the chain has a next cluster.
+    push si
+    mov si, [ds:bp+FL_FAT]
+    mov ax, [ds:bp+FL_CLUSTER]
+    mov [si+FT_CURRENT], ax
+    call pc88va_fat_next_core
+    jc .run_fat_error
+    mov ax, [si+FT_NEXT]
+    pop si
+    mov dx, [ds:bp+FL_CLUSTER]
+    inc dx
+    cmp ax, dx
+    jne .run_pending
+    mov [ds:bp+FL_CLUSTER], ax
+    mov ax, [ds:bp+FL_SECTORS_CLUSTER]
+    add [ds:bp+FL_RUN], ax
+    jmp .run_extend
+.run_fat_error:
+    pop si
+    jmp .restore
+.run_pending:
+    ; Not consecutive: this run ends here and the next one starts there.
+    mov [ds:bp+FL_PENDING], ax
+    mov word [ds:bp+FL_RUN_STATE], 1
+.run_read:
+    mov ax, [ds:bp+FL_RUN]
+    mov [si+RD_COUNT], ax
+    mov ax, [ds:bp+FL_FILE_POSITION]
+    mov [si+RD_OFFSET], ax
+    mov ax, [ds:bp+FL_SEGMENT]
+    mov [si+RD_SEGMENT], ax
+    mov ax, [ds:bp+FL_CAPACITY]
+    sub ax, [ds:bp+FL_LOADED]
+    jae .run_capacity
+    jmp .range
+.run_capacity:
+    mov [si+RD_CAPACITY], ax
+    call pc88va_disk_read_core
+    jnc .run_done
+    jmp .restore
+.run_done:
+    mov ax, [ds:bp+FL_RUN]
+    mul word [si+RD_SECTOR_BYTES]
+    add [ds:bp+FL_LOADED], ax
+    add [ds:bp+FL_FILE_POSITION], ax
+    sub [ds:bp+FL_REMAINING], ax
+    jnz .run_more
+    jmp .loaded
+.run_more:
+    cmp word [ds:bp+FL_RUN_STATE], 2
+    jne .run_next_cluster
+    mov ax, [ds:bp+FL_RUN]
+    add [ds:bp+FL_SECTOR_INDEX], ax
+    jmp .sector
+.run_next_cluster:
+    cmp word [ds:bp+FL_RUN_STATE], 1
+    jne .next_cluster
+    mov ax, [ds:bp+FL_PENDING]
+    mov [ds:bp+FL_CLUSTER], ax
+    jmp .cluster
+.scratch_sector:
     mov word [si+RD_COUNT], 1
     mov ax, [ds:bp+FL_SCRATCH_OFFSET]
     mov [si+RD_OFFSET], ax
@@ -189,6 +282,7 @@ pc88va_file_load_core:
     mov ax, [ds:bp+FL_SECTOR_INDEX]
     cmp ax, [ds:bp+FL_SECTORS_CLUSTER]
     jb .sector
+.next_cluster:
     mov si, [ds:bp+FL_FAT]
     mov ax, [ds:bp+FL_CLUSTER]
     mov [si+FT_CURRENT], ax

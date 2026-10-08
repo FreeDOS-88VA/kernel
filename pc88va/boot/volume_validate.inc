@@ -32,7 +32,12 @@ pc88va_volume_validate_core:
     cmp bx, 65536-RD_SIZE
     ja .contract
     cmp word [bx+RD_VERSION], 1
+    je .disk_version_ok
+    cmp word [bx+RD_VERSION], 2
     jne .contract
+    cmp bx, 65536-RD_SIZE2
+    ja .contract
+.disk_version_ok:
     mov ax, [bx+RD_SECTOR_BYTES]
     cmp ax, 128
     jb .contract

@@ -43,14 +43,15 @@ class DiskCoreTests(unittest.TestCase):
     def execute(self, updates=None, results=None, clobber=False):
         # Entirely synthetic geometry and placement, unrelated to private media.
         words = [1, 0, 1, 0x300, BUFFER_SEG, 0x4000, 72, 6, 2, 512,
-                 0x321, CALLBACK, CODE_SEG, 0] + [0] * 10
+                 0x321, CALLBACK, CODE_SEG, 0] + [0] * 11
         for index, value in (updates or {}).items():
             words[index] = value
+        run = words[0] == 2
         machine = Uc(UC_ARCH_X86, UC_MODE_16)
         machine.mem_map(0, 0x110000)
         machine.mem_write(CODE_SEG * 16, self.code)
         machine.mem_write(CODE_SEG * 16 + CALLBACK, b"\xcb")  # Fixture far return.
-        machine.mem_write(DATA_SEG * 16 + REQUEST, struct.pack("<24H", *words))
+        machine.mem_write(DATA_SEG * 16 + REQUEST, struct.pack("<25H", *words))
         stack = 0x3000
         machine.mem_write(STACK_SEG * 16 + stack, struct.pack("<H", STOP))
         preserved = {
@@ -74,13 +75,17 @@ class DiskCoreTests(unittest.TestCase):
         def callback(cpu, address, size, _):
             if address != CODE_SEG * 16 + CALLBACK:
                 return
-            request = struct.unpack("<24H", cpu.mem_read(DATA_SEG * 16 + REQUEST, 48))
+            request = struct.unpack("<25H", cpu.mem_read(DATA_SEG * 16 + REQUEST, 50))
             calls.append((request[21], request[16], request[17], request[18],
-                          request[19], request[20], request[10]))
-            status, count = next(outcomes, (0, request[9]))
+                          request[19], request[20], request[10]) + ((request[24],) if run else ()))
+            # Version 1 transfers one sector and returns bytes; version 2
+            # transfers RD_RUN sectors and returns their number.
+            status, count = next(outcomes, (0, request[24] if run else request[9]))
             if status == 0:
                 destination = request[20] * 16 + request[19]
-                cpu.mem_write(destination, bytes([request[21] & 255]) * min(count, request[9]))
+                sectors = min(count, request[24]) if run else 1
+                data = b"".join(bytes([(request[21] + n) & 255]) * request[9] for n in range(sectors))
+                cpu.mem_write(destination, data if run else data[:min(count, request[9])])
             if clobber:
                 for register in preserved:
                     if register != UC_X86_REG_SS:
@@ -97,7 +102,7 @@ class DiskCoreTests(unittest.TestCase):
         result = machine.reg_read(UC_X86_REG_AX)
         self.assertEqual(flags & ~1, 0x602, "only carry may change")
         self.assertEqual(flags & 1, int(result != 0))
-        final = struct.unpack("<24H", machine.mem_read(DATA_SEG * 16 + REQUEST, 48))
+        final = struct.unpack("<25H", machine.mem_read(DATA_SEG * 16 + REQUEST, 50))
         return result, calls, final, machine
 
     def test_first_sector_and_drive_context(self):
@@ -122,7 +127,7 @@ class DiskCoreTests(unittest.TestCase):
         self.assertEqual(bytes(machine.mem_read(BUFFER_SEG * 16 + 0x300, 4096)), expected)
 
     def test_invalid_contract_has_no_io(self):
-        for update in ({0: 2}, {7: 0}, {8: 0}, {6: 0}, {9: 513}, {9: 64},
+        for update in ({0: 3}, {0: 0}, {7: 0}, {8: 0}, {6: 0}, {9: 513}, {9: 64},
                        {9: 8192}, {7: 256}, {8: 257}, {11: 0, 12: 0}, {13: 4}):
             with self.subTest(update=update):
                 status, calls, _, _ = self.execute(update)
@@ -171,6 +176,40 @@ class DiskCoreTests(unittest.TestCase):
     def test_adapter_register_clobbers_are_contained(self):
         status, calls, final, _ = self.execute({2: 3}, clobber=True)
         self.assertEqual((status, len(calls), final[14]), (0, 3, 1536))
+
+    def test_version2_runs_end_at_the_track(self):
+        status, calls, final, machine = self.execute({0: 2, 1: 5, 2: 8})
+        self.assertEqual(status, 0)
+        # LBA, cylinder, head, sector, offset, segment, context, run.
+        self.assertEqual([(c[0],) + c[1:4] + (c[7],) for c in calls],
+                         [(5, 0, 0, 6, 1), (6, 0, 1, 1, 6), (12, 1, 0, 1, 1)])
+        self.assertEqual(final[14], 4096)
+        expected = b"".join(bytes([lba]) * 512 for lba in range(5, 13))
+        self.assertEqual(bytes(machine.mem_read(BUFFER_SEG * 16 + 0x300, 4096)), expected)
+
+    def test_version2_runs_stay_in_a_64k_physical_page(self):
+        # Start four sectors (0800h bytes) below a 64 KiB physical boundary.
+        segment = 0x1f80
+        status, calls, final, machine = self.execute(
+            {0: 2, 1: 6, 2: 6, 3: 0, 4: segment, 5: 0x1000})
+        self.assertEqual(status, 0)
+        self.assertEqual([(c[0], c[7]) for c in calls], [(6, 4), (10, 2)])
+        self.assertEqual(calls[1][4] + calls[1][5] * 16, 0x20000)
+        expected = b"".join(bytes([lba]) * 512 for lba in range(6, 12))
+        self.assertEqual(bytes(machine.mem_read(segment * 16, 3072)), expected)
+
+    def test_version2_straddling_sector_goes_alone(self):
+        # 0300h bytes below the boundary: one whole sector fits, the next
+        # straddles it and goes alone, the third starts the next page.
+        status, calls, _, _ = self.execute({0: 2, 1: 6, 2: 3, 3: 0x100, 4: 0x1fc0})
+        self.assertEqual(status, 0)
+        self.assertEqual([(c[0], c[7]) for c in calls], [(6, 1), (7, 1), (8, 1)])
+
+    def test_version2_wrong_completion_count_is_an_error(self):
+        for count in (0, 1, 3, 512):
+            with self.subTest(count=count):
+                status, calls, final, _ = self.execute({0: 2, 2: 2}, results=[(0, count)])
+                self.assertEqual((status, len(calls), final[14]), (4, 1, 0))
 
     def test_two_assemblies_identical(self):
         subprocess.run(self.command, check=True, capture_output=True)

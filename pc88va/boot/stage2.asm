@@ -100,10 +100,10 @@ pc88va_stage2_metadata:
     dw pc88va_stage2_root, pc88va_stage2_file
     dw S2_MIRROR_OFFSET, S2_SCRATCH_SEGMENT, S2_FAT_CAPACITY, 0
 pc88va_stage2_disk:
-    dw 1, 0, 1, S2_BOOT_OFFSET, S2_SCRATCH_SEGMENT, S2_SECTOR_BYTES
+    dw 2, 0, 1, S2_BOOT_OFFSET, S2_SCRATCH_SEGMENT, S2_SECTOR_BYTES
     dw S2_TOTAL_SECTORS, S2_SECTORS_TRACK, S2_HEADS, S2_SECTOR_BYTES
     dw 0, pc88va_stage2_adapter, 0, 0
-    times 10 dw 0
+    times 11 dw 0
 pc88va_stage2_volume:
     dw 1, S2_BOOT_OFFSET, S2_SCRATCH_SEGMENT, S2_SECTOR_BYTES, pc88va_stage2_disk
     dw S2_FAT_CAPACITY, S2_ROOT_CAPACITY, S2_BITMAP_CAPACITY
@@ -124,12 +124,12 @@ pc88va_stage2_file:
     dw 1, pc88va_stage2_disk, pc88va_stage2_fat, pc88va_stage2_root
     dw 0, PC88VA_INITIAL_LOAD_SEGMENT, S2_KERNEL_FILE_CAPACITY, 0, 0
     dw S2_BOOT_OFFSET, S2_SCRATCH_SEGMENT, S2_SECTOR_BYTES
-    times 9 dw 0
+    times 13 dw 0
 pc88va_stage2_config_file:
     dw 1, pc88va_stage2_disk, pc88va_stage2_fat, pc88va_stage2_root
     dw S2_CONFIG_OFFSET, S2_CONFIG_SEGMENT, S2_CONFIG_CAPACITY, 0, 0
     dw S2_BOOT_OFFSET, S2_SCRATCH_SEGMENT, S2_SECTOR_BYTES
-    times 9 dw 0
+    times 13 dw 0
 pc88va_stage2_mz:
     dw 1, 0, PC88VA_INITIAL_LOAD_SEGMENT, 0
 %if S2_KERNEL_IN_PLACE

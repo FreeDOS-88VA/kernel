@@ -211,15 +211,17 @@ class Stage2Tests(unittest.TestCase):
             if address != base + symbols["adapter"]:
                 return
             self.assertEqual(cpu.reg_read(UC_X86_REG_DS), base // 16)
-            request = struct.unpack("<24H", cpu.mem_read(base + symbols["disk"], 48))
-            self.assertEqual(request[10], 0x321)
-            lba = request[21]
-            reads.append(lba)
-            self.assertIn(lba, sectors)
-            status, completed = next(outcomes, (0, 512))
+            request = struct.unpack("<25H", cpu.mem_read(base + symbols["disk"], 50))
+            self.assertEqual((request[0], request[10]), (2, 0x321))
+            # Version 2: the callback transfers RD_RUN sectors, returns their number.
+            lba, run = request[21], request[24]
+            reads.append((lba, run))
+            for n in range(run):
+                self.assertIn(lba + n, sectors)
+            status, completed = next(outcomes, (0, run))
             if status == 0 and completed:
                 address = request[20] * 16 + request[19]
-                data = sectors[lba][:min(completed, 512)]
+                data = b"".join(sectors[lba + n] for n in range(min(completed, run)))
                 owned(address, len(data))
                 cpu.mem_write(address, data)
             if clobber:
@@ -261,12 +263,12 @@ class Stage2Tests(unittest.TestCase):
 
     def test_stage2_entry_to_kernel_entry(self):
         outcome, reads, _ = self.execute()
-        self.assertEqual((outcome, reads), ("entry", [0, 1, 2, 3, 4, 5, 7, 6]))
+        self.assertEqual((outcome, reads), ("entry", [(0, 1), (1, 1), (2, 1), (3, 2), (5, 1), (7, 1), (6, 1)]))
 
     def test_low_staging_stage2_entry_to_kernel_entry(self):
         outcome, reads, _ = self.execute(profile=self.low_profile, code=self.low_code,
                                          symbols=self.low_symbols)
-        self.assertEqual((outcome, reads), ("entry", [0, 1, 2, 3, 4, 5, 7, 6]))
+        self.assertEqual((outcome, reads), ("entry", [(0, 1), (1, 1), (2, 1), (3, 2), (5, 1), (7, 1), (6, 1)]))
 
     def test_no_incoming_stack_or_data_segment_dependency(self):
         self.assertEqual(self.execute(clobber=True)[0], "entry")
@@ -277,7 +279,7 @@ class Stage2Tests(unittest.TestCase):
     def test_disk_error_or_short_read_never_transfers(self):
         for result in ((1, 0), (0, 511)):
             outcome, reads, _ = self.execute(results=[result])
-            self.assertEqual((outcome, reads), ("failure", [0]))
+            self.assertEqual((outcome, reads), ("failure", [(0, 1)]))
 
     def test_mz_relocation_failure_never_transfers(self):
         self.assertEqual(self.execute(kernel=carrier(updates={3: 1}))[0], "failure")

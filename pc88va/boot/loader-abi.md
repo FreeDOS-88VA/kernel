@@ -51,6 +51,27 @@ wrapper will convert its near request argument in AX to DS:SI. Replacing the
 M06 stub is not complete until that wrapper is linked and the stage-2 instance
 is exercised by private VAEG acceptance. Unit fixtures are not firmware proof.
 
+## Disk request version 2
+
+Version 2 keeps the version 1 layout and adds one word, `RD_RUN` at offset 48
+(`RD_SIZE2` = 50 bytes). The core validates the request exactly as for version
+1, then issues callbacks for runs of sectors instead of single sectors. A run
+starts at the current position and ends at the earliest of the track end, the
+remaining count, and the end of the 64 KiB physical page that contains the
+current destination; a sector that straddles a page end goes alone. The core
+writes the run length to `RD_RUN` before each callback.
+
+A version 2 adapter transfers all `RD_RUN` sectors of one track to the current
+destination with one firmware request and returns AX=0 and CX=`RD_RUN`; any
+other CX is a short or oversized completion and an error. AX nonzero is an
+adapter error and the whole run is retried within the retry ceiling. Completed
+bytes, destination, LBA and remaining count advance by the whole run. Version 1
+requests and adapters are unchanged.
+
+The PC-88VA stage 1 and stage 2 use version 2 with the M20.1 firmware
+callback; the resident kernel requests remain version 1. A firmware read with
+a track per request avoids waiting about one disk revolution per sector.
+
 ## Cached FAT12 request version 1
 
 The `FT_*` layout in `loader_abi.inc` is a packed 26-byte request at DS:SI.
@@ -104,7 +125,7 @@ input words, other registers and other FLAGS are preserved.
 
 ## Composed file-loading request version 1
 
-The 42-byte `FL_*` record points to disjoint RD/FT/RT workspace records in the
+The 50-byte `FL_*` record points to disjoint RD/FT/RT workspace records in the
 caller's data segment. It supplies the file staging address/capacity, first data
 sector, sectors per cluster, and single-sector scratch address/capacity. The
 loader's initialization must first validate the complete memory ownership map,
@@ -115,9 +136,14 @@ The core verifies agreement of the cached metadata's cluster counts and the
 disk extent, validates cluster size, looks up the root entry, derives the exact
 required cluster count from its file size, and validates the entire FAT chain
 before issuing any file-data read. It then walks that chain, mapping each
-cluster to its data-sector range. One complete sector is read into scratch at
-a time; only the remaining file bytes are copied to staging for the final read.
-The copy is compared byte-for-byte against scratch before that scratch is reused.
+cluster to its data-sector range. Whole sectors that remain to be loaded are
+read directly into staging, in one disk request through the current cluster and
+any following consecutive clusters (with a version 2 disk request the core
+splits it into track runs). The staging capacity bounds each request. A final
+partial sector is read into scratch, and only the remaining file bytes are
+copied to staging; that copy is compared byte-for-byte against scratch before
+the scratch is reused. The run state words (`FL_RUN`, `FL_WHOLE`, `FL_PENDING`,
+`FL_RUN_STATE`) are core workspace.
 No error advances the request to the file-loaded state.
 
 The file core owns its workspace pointees and may update their request/output

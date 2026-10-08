@@ -130,7 +130,8 @@ class VolumeTests(unittest.TestCase):
     def test_invalid_context_or_adapter_geometry(self):
         for update in ({0: 2}, {4: 0xfff0}):
             self.assertEqual(self.execute(updates=update)[0], 50)
-        for update in ({0: 2}, {6: 0}, {7: 0}, {7: 256}, {8: 0}, {8: 257},
+        # Disk request versions 1 and 2 are valid; version 3 is not.
+        for update in ({0: 3}, {6: 0}, {7: 0}, {7: 256}, {8: 0}, {8: 257},
                        {9: 64}, {9: 513}, {9: 8192}):
             self.assertEqual(self.execute(disk_updates=update)[0], 50)
 

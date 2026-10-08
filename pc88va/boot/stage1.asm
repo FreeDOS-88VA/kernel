@@ -51,11 +51,11 @@ pc88va_stage1_adapter:
 align 2, db 0
 pc88va_stage1_call_flags: dw S1_CALL_FLAGS
 pc88va_stage1_disk:
-    dw 1, S1_STAGE2_LBA, S1_STAGE2_COUNT, 0, S2_STAGE2_SEGMENT
+    dw 2, S1_STAGE2_LBA, S1_STAGE2_COUNT, 0, S2_STAGE2_SEGMENT
     dw S2_STAGE2_CAPACITY, S2_TOTAL_SECTORS, S2_SECTORS_TRACK
     dw S2_HEADS, S2_SECTOR_BYTES, S1_DRIVE_CONTEXT
     dw pc88va_stage1_adapter, S1_ENTRY_SEGMENT, 0
-    times 10 dw 0
+    times 11 dw 0
 %if S2_SECTOR_BYTES = 512
 ; This immutable extent is checked by the builder and the assembly assertions.
 ; Stage 2 retains the full shared request validator for filesystem reads.
@@ -75,6 +75,7 @@ pc88va_stage1_read_extent:
     div word [si+RD_HEADS]
     mov [si+RD_CYLINDER], ax
     mov [si+RD_HEAD], dx
+    mov word [si+RD_RUN], 1
     push ds
     push si
     call far [si+RD_ADAPTER_OFFSET]
@@ -82,7 +83,7 @@ pc88va_stage1_read_extent:
     pop ds
     or ax, ax
     jnz .error
-    cmp cx, S2_SECTOR_BYTES
+    cmp cx, 1                   ; Version 2 callback: sectors transferred.
     jne .error
     add word [si+RD_CURRENT_OFFSET], S2_SECTOR_BYTES
     inc word [si+RD_CURRENT_LBA]
