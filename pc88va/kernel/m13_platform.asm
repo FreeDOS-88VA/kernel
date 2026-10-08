@@ -42,6 +42,7 @@ extern pc88va_kernel_disk_write_
 extern pc88va_kernel_firmware_read_one_
 extern pc88va_kernel_firmware_write_one_
 extern pc88va_m12_request_
+extern pc88va_m12_call_flags_
 extern pc88va_m12_buffer_
 extern pc88va_m12_drive_context_
 extern _int21_service
@@ -370,8 +371,100 @@ pc88va_m16_bind_request:
         mov ax, 1
         ret
 
+; Transfer CL sectors of one track between ES:DI and the floppy of the bound
+; unit with one ROM call.  AL = operation (81h read, 82h write, both without
+; ROM retries), BH = cylinder, BL = head, DH = first sector.  The caller has
+; validated the drive, the extent within the track and the buffer.  The
+; disk mode of the bound profile is selected before each attempt; up to
+; three attempts.  Returns AX = 0, or AX = 5 with the ROM status in
+; RD_ADAPTER_STATUS (0FFFFh for CF without a status) for
+; pc88va_map_va_write_status.  BX, CX, DX, SI, DI, BP, DS and ES preserved.
+pc88va_fl_direct:
+        push bx
+        push cx
+        push dx
+        push si
+        push di
+        push bp
+        push ds
+        push es
+        mov [cs:pc88va_fd_op], al
+        mov [cs:pc88va_fd_count], cl
+        mov [cs:pc88va_fd_chs], bx
+        mov [cs:pc88va_fd_sector], dh
+        mov byte [cs:pc88va_fd_tries], 3
+.attempt:
+        mov ax, [cs:pc88va_m12_request_+RD_DRIVE_CONTEXT]
+        call pc88va_m16_profile_index
+        mov al, [cs:pc88va_m16_profiles_+bx]
+        mov dl, al
+        and dl, 0fh
+        mov [cs:pc88va_fd_length], dl
+        mov ch, byte [cs:pc88va_m12_request_+RD_DRIVE_CONTEXT]
+        mov ah, 0ah
+        push es
+        push di
+        push word [cs:pc88va_m12_call_flags_]
+        popf
+        int 80h
+        pop di
+        pop es
+        jc .failed
+        or ah, ah
+        jnz .failed
+        mov bx, [cs:pc88va_fd_chs]
+        mov cl, bh
+        shl cl, 1
+        or cl, bl
+        mov ch, byte [cs:pc88va_m12_request_+RD_DRIVE_CONTEXT]
+        mov dh, [cs:pc88va_fd_sector]
+        mov dl, [cs:pc88va_fd_length]
+        mov bp, di
+        mov ah, [cs:pc88va_fd_op]
+        mov al, [cs:pc88va_fd_count]
+        push es
+        push di
+        push word [cs:pc88va_m12_call_flags_]
+        popf
+        int 80h
+        pop di
+        pop es
+        jc .failed
+        or ah, ah
+        jnz .failed
+        xor ax, ax
+        jmp short .done
+.failed:
+        mov al, ah
+        xor ah, ah
+        or ax, ax
+        jnz .status
+        mov ax, 0ffffh
+.status:
+        mov [cs:pc88va_m12_request_+RD_ADAPTER_STATUS], ax
+        dec byte [cs:pc88va_fd_tries]
+        jnz .attempt
+        mov ax, 5
+.done:
+        pop es
+        pop ds
+        pop bp
+        pop di
+        pop si
+        pop dx
+        pop cx
+        pop bx
+        ret
+
+pc88va_fd_chs: dw 0
+pc88va_fd_op: db 0
+pc88va_fd_count: db 0
+pc88va_fd_sector: db 0
+pc88va_fd_length: db 0
+pc88va_fd_tries: db 0
+
 ; Common driver read: drive, head, cylinder, sector, count, ES:BX buffer.
-; M12 receives one sector per request.  Geometry and sector bytes come from
+; The whole request moves in one ROM call into the caller buffer.  Geometry and sector bytes come from
 ; the profile installed by common-kernel media recognition.
 global FL_READ
 FL_READ:
@@ -427,45 +520,20 @@ FL_READ:
         mov dx, [cs:pc88va_m12_request_+RD_SECTOR_BYTES]
         call pc88va_validate_buffer_request
         jc .bad
-.next:
-        ; The full extent was validated before any sector transfer.
-        mov word [cs:pc88va_m12_request_+RD_LBA], si
-        mov word [cs:pc88va_m12_request_+RD_COUNT], 1
-        ; The resident validator requires an explicit qualified far adapter.
-        ; Keep the callback binding in the request built for each DOS read;
-        ; a zero binding is a contract error, not a firmware result.
-        mov word [cs:pc88va_m12_request_+RD_ADAPTER_OFFSET], pc88va_kernel_firmware_read_one_
-        mov word [cs:pc88va_m12_request_+RD_ADAPTER_SEGMENT], cs
-        mov word [cs:pc88va_m12_request_+RD_RETRIES], 3
-        mov word [cs:pc88va_m12_request_+RD_COMPLETED], 0
-        mov ax, pc88va_m12_request_
-        push ds
-        push cs
-        pop ds
-        call pc88va_kernel_disk_read_
-        pop ds
+        ; The common driver ends each request at the track end; the whole
+        ; validated extent goes to the caller buffer in one ROM call.
+        mov ax, [.sector]
+        add ax, cx
+        dec ax
+        cmp ax, [cs:pc88va_m12_request_+RD_SECTORS_TRACK]
+        ja .bad
+        mov bh, byte [.track]
+        mov bl, byte [.head]
+        mov dh, byte [.sector]
+        mov al, 81h
+        call pc88va_fl_direct
         or ax, ax
         jnz .read_io_error
-        push cx
-        push ds
-        push cs
-        pop ds
-        mov si, pc88va_m12_buffer_
-        mov cx, [cs:pc88va_m12_request_+RD_SECTOR_BYTES]
-        shr cx, 1
-        cld
-        rep movsw
-        pop ds
-        pop cx
-        ; SI is the source scratch pointer; recover the next LBA from the
-        ; request record rather than relying on the copied-byte count.
-        mov si, [cs:pc88va_m12_request_+RD_LBA]
-        inc si
-        ; REP MOVSW already advanced DI by exactly one sector. Advancing it
-        ; again would leave a gap and overwrite beyond the caller's buffer.
-        dec cx
-        jnz .next
-        xor ax, ax
         jmp short .return
 .read_io_error:
         cmp ax, 5
@@ -653,55 +721,19 @@ FL_WRITE:
         mov dx, [cs:pc88va_m12_request_+RD_SECTOR_BYTES]
         call pc88va_validate_buffer_request
         jc .write_bad
-.write_next:
-        ; The full extent was validated before any sector transfer.
-        push cx
-        push si
-        push di
-        push ds
-        push es
-        mov si, di
-        mov ax, es
-        mov ds, ax
-        push cs
-        pop es
-        mov di, pc88va_m12_buffer_
-        mov cx, [cs:pc88va_m12_request_+RD_SECTOR_BYTES]
-        shr cx, 1
-        cld
-        rep movsw
-        pop es
-        pop ds
-        pop di
-        pop si
-        pop cx
-        mov word [cs:pc88va_m12_request_+RD_LBA], si
-        mov word [cs:pc88va_m12_request_+RD_COUNT], 1
-        mov word [cs:pc88va_m12_request_+RD_ADAPTER_OFFSET], pc88va_kernel_firmware_write_one_
-        mov word [cs:pc88va_m12_request_+RD_ADAPTER_SEGMENT], cs
-        mov word [cs:pc88va_m12_request_+RD_RETRIES], 3
-        mov word [cs:pc88va_m12_request_+RD_COMPLETED], 0
-        mov ax, pc88va_m12_request_
-        push ds
-        push cs
-        pop ds
-        call pc88va_kernel_disk_write_
-        pop ds
+        mov ax, [.sector]
+        add ax, cx
+        dec ax
+        cmp ax, [cs:pc88va_m12_request_+RD_SECTORS_TRACK]
+        ja .write_bad
+        mov bh, byte [.track]
+        mov bl, byte [.head]
+        mov dh, byte [.sector]
+        mov al, 82h
+        call pc88va_fl_direct
         or ax, ax
-        jz .write_sector_ok
+        jz .write_return
         call pc88va_map_va_write_status
-        jmp short .write_return
-.write_sector_ok:
-        mov si, [cs:pc88va_m12_request_+RD_LBA]
-        inc si
-        dec cx
-        jz .write_complete
-        mov ax, [cs:pc88va_m12_request_+RD_SECTOR_BYTES]
-        add di, ax
-        jc .write_bad
-        jmp .write_next
-.write_complete:
-        xor ax, ax
         jmp short .write_return
 .write_bad:
         mov ax, 2
