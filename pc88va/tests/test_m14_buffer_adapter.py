@@ -8,10 +8,11 @@ import tempfile
 import unittest
 
 import unicorn
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE, UC_HOOK_INTR
 from unicorn.x86_const import (
     UC_X86_REG_AX, UC_X86_REG_CS, UC_X86_REG_DS, UC_X86_REG_SS,
     UC_X86_REG_SP, UC_X86_REG_EFLAGS,
+    UC_X86_REG_AH, UC_X86_REG_AL, UC_X86_REG_ES, UC_X86_REG_BP,
 )
 
 TARGET = Path(__file__).resolve().parents[1]
@@ -33,7 +34,8 @@ class BufferAdapterTests(unittest.TestCase):
                 'pc88va_kernel_disk_write_, pc88va_m12_request_, pc88va_m12_buffer_\n' + helpers + code +
                 '\npc88va_kernel_disk_read_: ret\npc88va_kernel_disk_write_: ret\n'
                 'pc88va_kernel_firmware_read_one_: retf\npc88va_kernel_firmware_write_one_: retf\n'
-                'pc88va_m12_drive_context_: dw 0\npc88va_m12_request_: times 48 db 0\n'
+                'pc88va_m12_drive_context_: dw 0\npc88va_m12_call_flags_: dw 0202h\n'
+                'pc88va_m12_request_: times 48 db 0\n'
                 'pc88va_m12_buffer_: times PC88VA_DISK_BUFFER_BYTES db 0\n'
                 'pc88va_m16_profiles_: dw 0023h,1280,8,2,1024,0023h,1280,8,2,1024\n')
         with tempfile.TemporaryDirectory(prefix="m14-buffer-adapter-") as directory:
@@ -62,18 +64,36 @@ class BufferAdapterTests(unittest.TestCase):
         calls = []
 
         def resident(cpu, address, _size, _):
+            # Verification still reads one sector at a time through the core.
             if address not in (CODE*16+self.read_core, CODE*16+self.write_core):
                 return
+            self.assertEqual(function, 2)
             request = struct.unpack('<24H', cpu.mem_read(CODE*16+self.request, 48))
             self.assertEqual((request[2], request[9]), (1, 1024))
             self.assertEqual(request[1], len(calls))
             calls.append(request[1])
-            if address == CODE*16+self.read_core:
-                cpu.mem_write(CODE*16+self.scratch, b'G'*1024)
-            else:
-                self.assertEqual(bytes(cpu.mem_read(CODE*16+self.scratch, 1024)), b'G'*1024)
+            cpu.mem_write(CODE*16+self.scratch, b'G'*1024)
             cpu.reg_write(UC_X86_REG_AX, 0)
 
+        def interrupt(cpu, number, _):
+            # Read and write move the whole request in one ROM call.
+            self.assertEqual(number, 0x80)
+            self.assertNotEqual(function, 2)
+            ah = cpu.reg_read(UC_X86_REG_AH)
+            if ah != 0x0a:
+                self.assertEqual(ah, (0x81, 0x82)[function])
+                sectors = cpu.reg_read(UC_X86_REG_AL)
+                target = cpu.reg_read(UC_X86_REG_ES)*16 + cpu.reg_read(UC_X86_REG_BP)
+                self.assertEqual(target, segment*16 + offset)
+                if function == 0:
+                    cpu.mem_write(target, b'G'*1024*sectors)
+                else:
+                    self.assertEqual(bytes(cpu.mem_read(target, 1024*sectors)), b'G'*1024*sectors)
+                calls.extend(range(len(calls), len(calls)+sectors))
+            cpu.reg_write(UC_X86_REG_AH, 0)
+            cpu.reg_write(UC_X86_REG_EFLAGS, cpu.reg_read(UC_X86_REG_EFLAGS) & ~1)
+
+        machine.hook_add(UC_HOOK_INTR, interrupt)
         machine.hook_add(UC_HOOK_CODE, resident)
         machine.emu_start(CODE*16+self.entries[function], CODE*16+STOP, count=500000)
         self.assertEqual(machine.reg_read(UC_X86_REG_SP), 0x1012)
@@ -82,7 +102,7 @@ class BufferAdapterTests(unittest.TestCase):
 
     def test_last_word_of_segment_is_a_valid_exclusive_end(self):
         for function in range(3):
-            for offset, count in ((0xFC00, 1), (0xF800, 2), (0, 64)):
+            for offset, count in ((0xFC00, 1), (0xF800, 2), (0xE000, 8)):
                 with self.subTest(function=function, offset=offset, count=count):
                     status, calls = self.execute(function, offset, count)
                     self.assertEqual(status, 0)
@@ -95,6 +115,14 @@ class BufferAdapterTests(unittest.TestCase):
                                            (0, 0, BUFFER), (0, 0xFFFF, BUFFER)):
                 with self.subTest(function=function, offset=offset, count=count, segment=segment):
                     self.assertEqual(self.execute(function, offset, count, segment), (2, []))
+
+
+    def test_read_and_write_reject_a_request_beyond_the_track_end(self):
+        # The common driver ends requests at the track end; the one-call
+        # read and write paths reject a longer request before any access.
+        for function in range(2):
+            with self.subTest(function=function):
+                self.assertEqual(self.execute(function, 0, 9), (2, []))
 
 
 if __name__ == '__main__':
