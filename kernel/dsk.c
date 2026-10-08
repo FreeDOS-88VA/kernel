@@ -1310,12 +1310,12 @@ STATIC int LBA_Transfer(ddt * pddt, UWORD mode, VOID FAR * buffer,
 #if defined(PC88VA)
 
 #if defined(PC88VA)
-    /* The legacy fl_* ABI has no completed-sector result.  Dispatching one
-       VA sector per common write call keeps r_count exact on an error and
-       prevents the common retry loop from replaying a dirty caller buffer on
-       a newly inserted medium.  The resident VA core still owns its bounded
-       firmware retries. */
-    if (((mode & 0xff00) == LBA_WRITE || mode == LBA_VERIFY) && count > 1)
+    /* Writes go a track at a time, as on the PC: on an error r_count
+       covers the sectors of the completed calls.  A single attempt keeps the
+       common retry loop from replaying a dirty caller buffer on a newly
+       inserted medium; the VA adapter owns its bounded firmware retries.
+       Verification still compares one sector at a time. */
+    if (mode == LBA_VERIFY && count > 1)
       count = 1;
     if ((mode & 0xfffd) == LBA_WRITE)
       retry_limit = 1;
