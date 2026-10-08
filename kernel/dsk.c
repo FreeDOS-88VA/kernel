@@ -444,7 +444,16 @@ STATIC WORD getbpb(ddt * pddt)
     {0x23, 80, 1280, 8, 2, 1024, 0xfe, 0}, /* existing M15 2HD */
     {0x23, 77, 1232, 8, 2, 1024, 0xfe, 0} /* 77-cylinder 2HD */
   };
+  /* Probe the profile last recognized on the unit first, and read the boot
+     sector once per disk mode: each mode change and failed read costs the
+     drive recalibrations and revolutions.  The accepted profiles and their
+     validation are unchanged. */
+  static UBYTE preferred_profile[2] = {5, 5};
+  unsigned pass;
   unsigned profile_index;
+  unsigned unit = pddt->ddt_driveno & 1;
+  UWORD read_mode = 0xffff;
+  UWORD failed_mode = 0xffff;
   UBYTE saw_read = FALSE;
   UBYTE legacy_native = FALSE;
 
@@ -456,20 +465,37 @@ STATIC WORD getbpb(ddt * pddt)
     pddt->ddt_descflags |= DF_DISKCHANGE;
 
   pddt->ddt_descflags |= DF_NOACCESS;
-  for (profile_index = 0;
-       profile_index < sizeof(profiles) / sizeof(profiles[0]);
-       profile_index++)
+  for (pass = 0; pass <= sizeof(profiles) / sizeof(profiles[0]); pass++)
   {
-    const pc88va_m16_profile *profile = &profiles[profile_index];
+    const pc88va_m16_profile *profile;
     BYTE *raw_bpb = (BYTE *)&DiskTransferBuffer[BT_BPB];
     bpb observed;
     UBYTE signature;
     UBYTE short_bpb;
 
-    ret = pc88va_m16_probe_read(pddt->ddt_driveno, profile->mode,
-                                (UBYTE FAR *)DiskTransferBuffer);
-    if (ret != 0)
+    if (pass == 0)
+      profile_index = preferred_profile[unit];
+    else
+    {
+      profile_index = pass - 1;
+      if (profile_index == preferred_profile[unit])
+        continue;
+    }
+    profile = &profiles[profile_index];
+    if (profile->mode == failed_mode)
       continue;
+    if (profile->mode != read_mode)
+    {
+      ret = pc88va_m16_probe_read(pddt->ddt_driveno, profile->mode,
+                                  (UBYTE FAR *)DiskTransferBuffer);
+      if (ret != 0)
+      {
+        read_mode = 0xffff;
+        failed_mode = profile->mode;
+        continue;
+      }
+      read_mode = profile->mode;
+    }
     saw_read = TRUE;
     signature = DiskTransferBuffer[0x1fe] == 0x55 &&
                 DiskTransferBuffer[0x1ff] == 0xaa;
@@ -516,6 +542,8 @@ STATIC WORD getbpb(ddt * pddt)
     {
       unsigned fat_copy;
       ULONG lba;
+      /* The checks below overwrite the boot sector in the buffer. */
+      read_mode = 0xffff;
       for (fat_copy = 0; fat_copy < 2; fat_copy++)
       {
         lba = observed.bpb_nreserved +
@@ -541,6 +569,7 @@ STATIC WORD getbpb(ddt * pddt)
     memcpy(pbpbarray, &observed, sizeof(observed));
     pddt->ddt_ncyl = profile->cylinders;
     pddt->ddt_descflags &= ~DF_NOACCESS;
+    preferred_profile[unit] = (UBYTE)profile_index;
     goto read_extended_bpb;
   }
 
